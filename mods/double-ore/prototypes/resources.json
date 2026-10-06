@@ -1,0 +1,7 @@
+[
+  { "op": "patch", "type": "resource", "id": "iron-ore", "set": { "richness": 2 } },
+  { "op": "patch", "type": "resource", "id": "copper-ore", "set": { "richness": 2 } },
+  { "op": "patch", "type": "resource", "id": "coal", "set": { "richness": 2 } },
+  { "op": "patch", "type": "resource", "id": "stone", "set": { "richness": 2 } },
+  { "op": "patch", "type": "resource", "id": "crude-oil", "set": { "richness": 2 } }
+]

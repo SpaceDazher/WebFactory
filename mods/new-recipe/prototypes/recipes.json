@@ -1,0 +1,6 @@
+[
+  { "op": "add", "type": "recipe", "id": "gears-from-steel", "name": "Шестерни из стали",
+    "in": [["steel-plate", 1]], "out": [["iron-gear-wheel", 3]], "time": 1.5, "cat": "crafting", "hand": true, "enabled": false },
+  { "op": "patch", "type": "technology", "id": "steel-processing",
+    "set": { "desc": "Сталь, стальная печь, шестерни из стали", "unlocks": ["steel-plate", "steel-furnace", "steel-chest", "gears-from-steel"] } }
+]

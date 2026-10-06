@@ -1,0 +1,10 @@
+[
+  { "op": "add", "type": "entity", "id": "crate", "from": "iron-chest",
+    "name": "Контейнер", "w": 2, "h": 2, "slots": 96, "hp": 500, "mineTime": 0.3, "color": "#6f7f5a", "sprite": "sprites/crate.png" },
+  { "op": "add", "type": "item", "id": "crate", "name": "Контейнер", "stack": 20, "color": "#6f7f5a",
+    "icon": "chest", "group": "logistics", "place": "crate", "sprite": "sprites/crate-icon.png" },
+  { "op": "add", "type": "recipe", "id": "crate", "in": [["steel-plate", 6], ["iron-chest", 2]], "out": [["crate", 1]],
+    "time": 2, "cat": "crafting", "hand": true, "enabled": false },
+  { "op": "add", "type": "technology", "id": "crates", "name": "Контейнеры", "desc": "Контейнер 2×2 на 96 ячеек",
+    "prereq": ["steel-processing"], "count": 50, "time": 10, "packs": ["automation-science-pack"], "unlocks": ["crate"] }
+]

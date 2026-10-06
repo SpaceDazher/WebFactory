@@ -1,0 +1,23 @@
+{
+  "name": "zavod-7",
+  "version": "1.10.0",
+  "private": true,
+  "description": "ЗАВОД-7 — 2D factory-builder в браузере (M0–M10: Worker-симуляция, RU/EN, PWA; Chrome 80+, Firefox 113+, Safari 16.4+)",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs --min",
+    "build:dev": "node build.mjs",
+    "typecheck": "tsc -p .",
+    "test": "tsx tests/sim.test.ts && tsx tests/core19.test.ts && tsx tests/m5.test.ts && tsx tests/m8m9.test.ts && tsx tests/compat.test.ts && tsx tests/stats.test.ts && tsx tests/robots.test.ts && tsx tests/logistics.test.ts && tsx tests/storage.test.ts && tsx tests/circuits.test.ts && tsx tests/circuits2.test.ts && tsx tests/rails.test.ts && tsx tests/rails2.test.ts && RAILNET_HOURS=1 tsx tests/railnet.test.ts && tsx tests/mp.test.ts && MEGA_QUICK=1 tsx tests/mega.test.ts && tsx tests/mods.test.ts && tsx tools/i18n-check.ts",
+    "test:railnet": "tsx tests/railnet.test.ts",
+    "chaos": "tsx tests/chaos.test.ts",
+    "saves": "tsx tools/oldsaves.ts",
+    "bench": "tsx tests/bench.ts",
+    "balance": "tsx tools/balance.ts",
+    "bot": "tsx tools/bot/run.ts",
+    "mpbot": "tsx tools/mp-bot.ts",
+    "signal": "node tools/signal-server.mjs",
+    "e2e": "node tests/e2e5.mjs && node tests/e2e6.mjs && node tests/e2e7.mjs && node tests/e2e8.mjs && node tests/e2e9.mjs && node tests/e2e10.mjs && node tests/e2e11.mjs && tsx tests/e2e12.mjs && node tests/e2e13.mjs && node tests/e2e14.mjs && node tests/e2e15.mjs && node tests/e2e16.mjs && node tests/e2e17.mjs && node tests/e2e18.mjs && node tests/e2e19.mjs && node tests/e2e20.mjs && node tests/e2e21.mjs && node tests/e2e22.mjs && node tests/e2e23.mjs && node tests/e2e24.mjs"
+  },
+  "devDependencies": { "esbuild": "^0.25.0", "typescript": "^5.6.0", "tsx": "^4.19.0", "playwright": "^1.48.0" }
+}
