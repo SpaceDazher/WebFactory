@@ -41,7 +41,7 @@ console.log('1. Разбор файлов');
     ['ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)), SwiftShader driver)', 'software'], ['llvmpipe (LLVM 15.0.7, 256 bits)', 'software'], ['', 'unknown'], ['Mali-G78', 'integrated']];
   const bad = c.filter(([g, k]) => classifyGpu(g) !== k);
   ok(!bad.length, `классы видеокарт (${c.length} случаев)${bad.length ? ': ' + bad.map(([g, k]) => `${g} → ${classifyGpu(g)} ≠ ${k}`).join('; ') : ''}`);
-  const real = fs.readdirSync('shots').filter(f => /^v11-gpubench-.*\.json$/.test(f));
+  const real = (fs.existsSync('shots') ? fs.readdirSync('shots') : []).filter(f => /^v11-gpubench-.*\.json$/.test(f));
   if (real.length) {
     const inp = load(real.map(f => ({ name: f, text: fs.readFileSync('shots/' + f, 'utf8') })));
     ok(inp.benches.length === real.length && inp.benches.every(b => b.ents >= 1900 && b.fps > 0 && b.p95 >= b.p50), `настоящие файлы замера из e2e15 разобраны: ${inp.benches.map(b => `${b.browser} ${b.cls} ${b.fps} к/с`).join(', ')}`);
