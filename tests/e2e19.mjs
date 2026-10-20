@@ -124,11 +124,18 @@ for (const mode of ['webgl', 'canvas']) {
   await p.evaluate(id => window.__zavod.ui.toggle('ent', id), sc.lamp); await p.waitForTimeout(600);
   await down(p, '[data-act="cen"]'); await p.waitForSelector('[data-act="ca"]', { timeout: 5000 });
   await down(p, '[data-act="ca"]'); await p.waitForSelector('[data-act="pick"][data-item="signal-blue"]', { timeout: 5000 });
+  const lampSnapshotsBeforePick = await p.evaluate(() => window.__zavod.sim?.snaps || 0);
   await down(p, '[data-act="pick"][data-item="signal-blue"]');
-  const lampSignalPicked = await until(p, id => window.__zavod.game.ents.get(id)?.cc?.en?.a === 'signal-blue', sc.lamp, 5000);
+  // setCC optimistically mutates the mirror before the Worker processes cset.
+  // Waiting for that same mutation returns immediately and the next snapshot can
+  // overwrite it before the following synthetic click. Require fresh snapshots.
+  const lampSignalPicked = await until(p, ([id, before]) =>
+    (!window.__zavod.sim || window.__zavod.sim.snaps >= before + 2) &&
+    window.__zavod.game.ents.get(id)?.cc?.en?.a === 'signal-blue', [sc.lamp, lampSnapshotsBeforePick], 5000);
   await down(p, '[data-act="cop"]'); await p.waitForTimeout(400); // < → >
   await down(p, '[data-act="ccol"]'); await p.waitForTimeout(600);
   const lamp = await W(p, `const e = g.ents.get(${sc.lamp}); return { cc: e.cc, active: e.active, col: e.ccol };`);
+  console.log('  lamp diagnostic: ' + JSON.stringify({ lampSignalPicked, ...lamp }));
   ok(lampSignalPicked && lamp.cc.en.a === 'signal-blue' && lamp.cc.en.op === '>' && lamp.cc.col && lamp.active && lamp.col === '#3a7bff', `лампа: «синий > 0», горит синим (${lamp.col})`);
   await p.evaluate(() => window.__zavod.ui.close());
 
