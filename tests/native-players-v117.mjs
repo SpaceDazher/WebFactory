@@ -58,7 +58,7 @@ export async function acceptRelayInviteLifecycle({ relay, getStatus, mutate, wor
   console.log('✔ actual gateway process restart restores the original invitation; rotation revokes its old code and copied link');
 }
 
-export async function acceptNativePlayers({ request, headers, mutate, getStatus, playPort, worldId, ownerId, supplyId, relay }) {
+export async function acceptNativePlayers({ request, headers, mutate, getStatus, playPort, worldId, ownerId, supplyId, relay, soak }) {
   const oldWebSocket = globalThis.WebSocket;
   const rawSockets = new Set(), clients = new Set(), transportErrors = [];
   let completed = false;
@@ -97,6 +97,7 @@ export async function acceptNativePlayers({ request, headers, mutate, getStatus,
       async payload => auth.ownerToken ? { ownerToken: auth.ownerToken } : { publicKey: auth.identity.key, proof: sign(null, Buffer.from(payload), auth.identity.privateKey).toString('hex') });
     clients.add(client);
     const send = message => transport.send(encodeNativeJson(message));
+    const acceptSnapshot = snapshot => { client.snapshot = snapshot; client.v117 = snapshot.v117 || client.v117; client.snapshots++; client.snapshotAt = Date.now(); client.observeSnapshot?.(snapshot); };
     client.send = send;
     client.command = command => send({ type: 'cmd', seq: ++client.seq, command });
     client.close = () => { transport.close(); clients.delete(client); };
@@ -118,14 +119,14 @@ export async function acceptNativePlayers({ request, headers, mutate, getStatus,
           }
           send(response);
         } else if (message.type === 'welcome') { client.welcome = message; transport.authenticated(); }
-        else if (message.type === 'snapshot') { client.snapshot = message.snapshot; client.snapshots++; }
+        else if (message.type === 'snapshot') { acceptSnapshot(message.snapshot); }
         else if (message.type === 'snapshot-begin') { client.transfer = { ...message, chunks: [] }; }
         else if (message.type === 'snapshot-chunk') {
           const t = client.transfer; assert.ok(t); assert.equal(message.id, t.id); assert.equal(message.index, t.chunks.length);
           t.chunks.push(Buffer.from(message.data, 'base64'));
           if (t.chunks.length === t.parts) {
             const bytes = Buffer.concat(t.chunks); assert.equal(bytes.length, t.bytes); assert.equal(nativeWireHash(bytes), t.hash);
-            client.snapshot = decodeNativeJson(bytes.toString('utf8'), t.bytes + 1).snapshot; client.snapshots++; client.transfer = null;
+            acceptSnapshot(decodeNativeJson(bytes.toString('utf8'), t.bytes + 1).snapshot); client.transfer = null;
           }
           send({ type: 'snapshot-ack', id: message.id, index: message.index });
         } else if (message.type === 'error') client.error = message.code;
@@ -179,6 +180,7 @@ export async function acceptNativePlayers({ request, headers, mutate, getStatus,
     assert.equal(owner.snapshot.player.x, initialOwnerX, 'guest movement does not control the owner');
     const copper = count(first.snapshot, 'copper-plate');
     assert.notEqual(copper, count(owner.snapshot, 'copper-plate'), 'owner inventory stays separate');
+    const finishSoak = soak ? await (await import('./native-soak-v117.mjs')).acceptNativeSoak({ clients: [owner, ...guests], getStatus, ...soak }) : null;
     const originalSnapshots = new Map([owner, ...guests].map(c => [c, c.snapshots]));
     // Physical path interruption must resume the existing logical stream/engineer.
     for (const socket of rawSockets) socket.terminate();
@@ -232,6 +234,7 @@ export async function acceptNativePlayers({ request, headers, mutate, getStatus,
     assert.equal(afterRestart.welcome.playerId, ids[0]); assert.equal(count(afterRestart.snapshot, 'iron-gear-wheel'), gears + 1); assert.equal(count(afterRestart.snapshot, 'copper-plate'), copper);
     const rosterResponse = await request('/settings', { headers }); const roster = (await rosterResponse.json()).roster;
     assert.equal(roster.length, 16); assert.equal(new Set(roster.map(p => p.playerId)).size, 16);
+    if (finishSoak) await finishSoak();
     completed = true;
     console.log('✔ packaged server: 16 independent network clients, 17th rejected, password/whitelist, physical resume, stable guest identity/inventory and persisted 16-engineer roster');
     if (relay) console.log('✔ packaged public-key relay over verified ' + (relay.dropHost ? 'local TLS with host tunnel recovery' : 'public HTTPS/WSS') + ', room resolution and no control-plane exposure: ' + JSON.stringify(relay.stats));

@@ -3,14 +3,15 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { access, mkdir, mkdtemp, readFile, realpath, rename, rm, rmdir } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, realpath, rename, rm, rmdir, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createServer } from 'node:net';
-import { basename, join, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { Game } from '../src/sim/game.ts';
 import { serialize, deserialize } from '../src/sim/save.ts';
 import { quickHash } from '../src/sim/nethash.ts';
 import { newScenario } from '../src/sim/scenario.ts';
+import { nativeSoakOptions } from './native-soak-v117.mjs';
 import { encodeNativeJson, decodeNativeJson } from '../src/net/native-protocol.ts';
 
 const root = resolve('logs/verify-20261019');
@@ -23,16 +24,19 @@ await Promise.all(probes.map(s => new Promise((ok, fail) => { s.once('error', fa
 const [controlPort, playPort] = probes.map(s => s.address().port);
 await Promise.all(probes.map(s => new Promise((ok, fail) => s.close(error => error ? fail(error) : ok()))));
 const data = await mkdtemp(join(root, 'native-smoke-'));
+const soakOptions = nativeSoakOptions(process.argv);
+const soak = soakOptions ? { options: soakOptions, metricsFile: resolve('logs/acceptance-20261020/native-soak-' + process.pid + '-memory.jsonl'), reportFile: resolve('logs/acceptance-20261020/native-soak-' + process.pid + '.json') } : null;
+if (soak) { await mkdir(dirname(soak.metricsFile), { recursive: true }); await writeFile(soak.metricsFile, '', { flag: 'wx' }); }
 const relayHelpers = process.argv.includes('--relay') ? await import('./native-relay-v117.mjs') : null;
 const relay = relayHelpers ? process.env.ZAVOD_ACCEPTANCE_RELAY_ORIGIN
   ? await relayHelpers.connectPublicAcceptanceRelay(process.env.ZAVOD_ACCEPTANCE_RELAY_ORIGIN)
   : await relayHelpers.startAcceptanceRelay(root, runtime) : null;
-const child = spawn(runtime, [resolve('dist/native/server.mjs')], {
+const child = spawn(runtime, [...(soak ? ['--expose-gc', '--import', new URL('./native-soak-metrics.mjs', import.meta.url).href] : []), resolve('dist/native/server.mjs')], {
   cwd: resolve('dist/native'), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
   env: { ...process.env, ZAVOD_DATA_DIR: data, ZAVOD_CONTROL_PORT: String(controlPort), ZAVOD_PLAY_PORT: String(playPort), ZAVOD_CONTROL_BIND: '127.0.0.1', ZAVOD_PUBLIC_ORIGIN: '', ZAVOD_RELAY_ORIGIN: '',
     ZAVOD_RELAY_URL: process.argv.includes('--provider-default') ? '' : relay?.hostUrl || '',
     ZAVOD_RELAY_PUBLIC_ORIGIN: process.argv.includes('--provider-default') ? '' : relay?.origin || '', ZAVOD_RELAY_HOST_TOKEN: '',
-    ...(relay?.caPath ? { NODE_EXTRA_CA_CERTS: relay.caPath } : {}) },
+    ...(relay?.caPath ? { NODE_EXTRA_CA_CERTS: relay.caPath } : {}), ...(soak ? { ZAVOD_SOAK_METRICS_FILE: soak.metricsFile } : {}) },
 });
 let stderr = '', timer;
 child.stderr.setEncoding('utf8'); child.stderr.on('data', text => { stderr = (stderr + text).slice(-4000); });
@@ -135,7 +139,7 @@ try {
   }
   if (manyPlayers) {
     const { acceptNativePlayers } = await import('./native-players-v117.mjs');
-    await acceptNativePlayers({ request, headers, mutate, getStatus, playPort, worldId: committed.worldId, ownerId: owner, supplyId: supply.id, relay });
+    await acceptNativePlayers({ request, headers, mutate, getStatus, playPort, worldId: committed.worldId, ownerId: owner, supplyId: supply.id, relay, soak });
   }
   if (process.argv.includes('--browser')) {
     const { launchBrowser } = await import('./browser.mjs');
