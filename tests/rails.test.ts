@@ -8,6 +8,7 @@ import { makeBlueprint } from '../src/sim/blueprint';
 import { shapeOf, rotVariant, mirrorVariant } from '../src/sim/railgeo';
 import { placeCar, planRail, trainOf, fillPct, carAt, removeCar } from '../src/sim/trains';
 import { RECIPES } from '../src/data/recipes';
+import { locoFuelInventory } from '../src/sim/trainfuel';
 let fails = 0;
 const ok = (c: boolean | undefined, m: string) => { console.log((c ? '  ✔ ' : '  ✘ ') + m); if (!c) fails++; };
 const fresh = (seed = 7) => { const g = new Game(seed, true, { enemies: 'none' }); for (const r of Object.values(RECIPES)) g.enabled.add(r.id); g.inv.slots.fill(null); (g as any).sat = () => 1; for (const t of ['railway', 'automated-rail-transportation']) g.research.done.add(t); return g; };
@@ -77,7 +78,7 @@ ok(g.carCells.size > 0, 'клетки стоящих вагонов отмече
 let maxV = 0; const lap = run(g, 6000, () => { maxV = Math.max(maxV, T.v); return (T.laps || 0) >= 1 && T.si === 1 && T.st === 'wait'; });
 ok((T.laps || 0) >= 1, `полный круг Запад → Восток → Запад за ${lap} тиков, макс. скорость ${(maxV / 1000 / 1000 * 60).toFixed(1)} кл/с`);
 ok(maxV > 100000, 'разгоняется');
-ok(L1.fuel!.count < 50 || L2.fuel!.count < 50 || (L1.fuelJ || 0) > 0, 'топливо тратится');
+ok(locoFuelInventory(L1)!.count('coal') < 50 || locoFuelInventory(L2)!.count('coal') < 50 || (L1.fuelJ || 0) > 0, 'топливо тратится из пяти ячеек');
 
 console.log('5. Условия «полон» и «пуст», фильтры, манипуляторы');
 {

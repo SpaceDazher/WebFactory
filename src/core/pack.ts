@@ -10,8 +10,9 @@ async function through(data: Uint8Array, ts: { readable: ReadableStream<Uint8Arr
 }
 function toB64(u: Uint8Array): string { let bin = ''; for (let i = 0; i < u.length; i += 0x8000) bin += String.fromCharCode(...u.subarray(i, i + 0x8000)); return btoa(bin); }
 function fromB64(s: string): Uint8Array { const bin = atob(s.replace(/\s+/g, '')); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; }
-export async function packStr(obj: any): Promise<string> {
-  const str = JSON.stringify(obj);
+export async function packStr(obj: any): Promise<string> { return packText(JSON.stringify(obj)); }
+/** v1.13: то же для уже готовой строки JSON (не разбирать и не собирать заново большое сохранение) */
+export async function packText(str: string): Promise<string> {
   if (typeof CompressionStream === 'undefined') return 'J' + str;
   try { return '0' + toB64(await through(new TextEncoder().encode(str), new CompressionStream('deflate'))); }
   catch (e) { console.warn('deflate недоступен, сохраняю без сжатия:', e); return 'J' + str; }

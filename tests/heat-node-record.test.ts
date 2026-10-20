@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import { HeatStorage } from '../src/sim/heat-cache';
+import type { Entity } from '../src/sim/game';
+const a={id:1,t:'hpipe'} as Entity,b={id:2,t:'hpipe'} as Entity;
+const storage=new HeatStorage();const first=storage.insert(a,1e6);storage.insert(b,1e6);first.neighbors.push(2);storage.rebuildRow(1);storage.rebuildRow(2);storage.finish();
+const fork=storage.fork(),changed=fork.writable(1)!;
+assert.equal(Object.getPrototypeOf(first),Object.getPrototypeOf(changed),'insert and clone use one record representation');
+assert.equal(Object.getPrototypeOf(first).constructor.name,'HeatNodeRecord','topology records have a stable explicit class rather than spread-derived shapes');
+assert.notEqual(changed,first);assert.notEqual(changed.neighbors,first.neighbors);assert.equal(changed.edges,first.edges);
+changed.neighbors.length=0;assert.deepEqual(first.neighbors,[2]);assert.equal(changed.entity,a);
+console.log('✔ stable heat node records: one constructor, copied adjacency, retained immutable edge rows');

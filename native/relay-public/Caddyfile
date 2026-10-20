@@ -1,0 +1,20 @@
+{
+  email {$ZAVOD_ACME_EMAIL}
+  log default {
+    format filter {
+      wrap json
+      fields {
+        request>uri delete
+        request>headers delete
+        request>remote_ip delete
+        request>client_ip delete
+      }
+    }
+  }
+}
+
+{$ZAVOD_SERVER_DOMAIN} {
+  reverse_proxy relay:17900 {
+    stream_close_delay 5m
+  }
+}

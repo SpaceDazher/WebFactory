@@ -1,0 +1,24 @@
+{
+  "renderer": "webgl",
+  "kind": "webgl",
+  "gpu": "ANGLE (Intel, Intel(R) UHD Graphics (0x000046A3) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+  "attributes": {
+    "alpha": true,
+    "antialias": false,
+    "depth": true,
+    "desynchronized": false,
+    "failIfMajorPerformanceCaveat": false,
+    "powerPreference": "default",
+    "premultipliedAlpha": true,
+    "preserveDrawingBuffer": false,
+    "stencil": false,
+    "xrCompatible": false
+  },
+  "lost": false,
+  "drawingBuffer": [
+    1200,
+    675
+  ],
+  "observation": "Actual game R.batch.gl in native foreground Chrome 137 before high-performance hint; not a throwaway probe. No OS settings changed.",
+  "version": "1.16.0-rc.7"
+}

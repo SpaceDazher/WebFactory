@@ -7,12 +7,51 @@ import { Plan, PEnt, Port, portsOf, routePipe, commitRoute, key, unkey, dims, fi
 import { Block, CellSpec, XY, mk } from './layouts';
 import type { Entity } from '../../src/sim/game';
 import { DX, DY } from '../../src/core/types';
+import { CREEP_BLOCK, creepAt } from '../../src/sim/enemies';
 
-export type CellKind = 'craft' | 'smelt' | 'lab' | 'col' | 'raw' | 'power' | 'chem' | 'ref' | 'pj' | 'silo' | 'burner';
+export type CellKind = 'defense' | 'craft' | 'smelt' | 'lab' | 'col' | 'raw' | 'power' | 'chem' | 'ref' | 'pj' | 'silo' | 'burner';
 export interface Cell { id: number; kind: CellKind; recipe: string | null; m: XY; in?: XY; out?: XY; i?: XY; prio: number; block: number; res?: string; direct?: string[]; }
 export interface BlockRec { id: number; name: string; x: number; y: number; w: number; h: number; kind: CellKind; cells: number[]; }
 const FLUIDS = new Set(Object.keys(ITEMS).filter(k => ITEMS[k].fluid));
 const POLE = 'small-electric-pole';
+
+class RouteHeap {
+  private a: [number, number, number, number][] = [];
+  private less(x: [number, number, number, number], y: [number, number, number, number]) { return x[0] < y[0] || (x[0] === y[0] && (x[1] < y[1] || (x[1] === y[1] && x[3] > y[3]))); }
+  push(f: number, tie: number, k: number, g: number) {
+    const a = this.a; a.push([f, tie, k, g]); let i = a.length - 1;
+    while (i > 0) { const p = (i - 1) >> 1; if (!this.less(a[i], a[p])) break; [a[p], a[i]] = [a[i], a[p]]; i = p; }
+  }
+  pop(): [number, number, number, number] | undefined {
+    const a = this.a, top = a[0], last = a.pop(); if (!top) return;
+    if (a.length) { a[0] = last!; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i;
+      if (l < a.length && this.less(a[l], a[m])) m = l; if (r < a.length && this.less(a[r], a[m])) m = r;
+      if (m === i) break; [a[m], a[i]] = [a[i], a[m]]; i = m;
+    } }
+    return top;
+  }
+  get size() { return this.a.length; }
+}
+
+/** Register power-block water and steam ports before routing the boiler feed. */
+export function planPowerFluidPorts(plan: Plan, b: Block, ox: number, oy: number) {
+  for (const e of b.bp.entities) {
+    const placed = { p: e.p, x: ox + e.x, y: oy + e.y, d: e.d, recipe: e.recipe };
+    if (e.p === 'pipe' || e.p === 'pipe-to-ground') {
+      plan.add(placed, 'water-p');
+      continue;
+    }
+    if (e.p === 'electric-mining-drill') {
+      // The power block drills mine coal, but their dormant acid ports still
+      // occupy a real connection point. Keep boiler water routes away from it.
+      plan.add(placed, undefined, portsOf(placed, { in: ['sulfuric-acid'] }));
+      continue;
+    }
+    const fixed = e.p === 'boiler' ? ['water-p', 'steam-p'] : e.p === 'steam-engine' ? ['steam-p'] : null;
+    if (fixed) plan.add(placed, undefined, portsOf(placed, { fixed }));
+  }
+}
+
 /** запас продукта, выше которого ячейку не кормим (канбан) */
 const CAP: Record<string, number> = { 'iron-gear-wheel': 600, 'copper-cable': 1200, 'electronic-circuit': 1200, 'inserter': 200, 'fast-inserter': 100, 'transport-belt': 200, pipe: 400,
   'automation-science-pack': 300, 'logistic-science-pack': 300, 'chemical-science-pack': 300, 'production-science-pack': 300, 'utility-science-pack': 300,
@@ -63,7 +102,8 @@ export class Factory extends Bot {
         for (const p of TECHS[t].packs) { const h = have[p] || 0; if (h < 10) reqs.push({ e: chest, item: p, n: 30 - h, prio: 0 }); }
         continue;
       }
-      const r = RECIPES[c.recipe!]; const prod = r.out[0][0];
+      const r = RECIPES[c.recipe!]; const firstOut = r.out[0]; if (!firstOut) continue;
+      const [prod, perCraft] = firstOut;
       if (r.in.some(([it]) => this.reserved[it]) && !this.wantChain.has(prod)) continue; // материалы нужны на стройку (кроме ячеек, что делают недостающее)
       if (c.kind === 'silo') {
         for (const [it, n] of r.in) { const h = have[it] || 0; if (h < n * 5) reqs.push({ e: chest, item: it, n: n * 10 - h, prio: 0 }); }
@@ -72,7 +112,7 @@ export class Factory extends Bot {
       const cap = c.out ? this.caps[prod] ?? Infinity : Infinity; const s = c.out ? st[prod] || 0 : 0; if (s >= cap) continue;
       const m = this.E(c.m); if (!m) continue;
       if (m.status === 'output-full' && c.kind !== 'chem') continue;
-      const t = this.cellTime(c); let k = Math.min(H / t, (cap - s) / r.out[0][1] + 2);
+      const t = this.cellTime(c); let k = Math.min(H / t, (cap - s) / perCraft + 2);
       const solid = r.in.filter(i => !FLUIDS.has(i[0]) && !c.direct?.includes(i[0]));
       if (c.kind === 'smelt') solid.push(['coal', 0]);
       // не больше ~26 слотов на всё
@@ -175,10 +215,13 @@ export class Factory extends Bot {
       const did = yield* this.round();
       if (cond()) return;
       if (this.g.tick - this.lastBalance > 20 * 3600) { this.lastBalance = this.g.tick; yield* this.balance(); }
+      if (this.g.tick - this.lastGuard > 5 * 3600) { this.lastGuard = this.g.tick; yield* this.guard(); }
       yield did ? 120 : 900;
     }
   }
-  lastBalance = 0;
+  lastBalance = 0; lastGuard = 0;
+  /** v1.14.1: оборона (переопределяется в defense.ts) */
+  *guard(): Task {}
   /** подстройка добычи и энергии под фактические запасы (переопределяется в сценарии) */
   *balance(): Task {}
   onCheckpoint() {
@@ -226,7 +269,7 @@ export class Factory extends Bot {
         if (pass % 20 === 0) this.log(`жду материалы для ${it}: нет ${Object.entries(missing).map(([a, b]) => a + ' ' + Math.ceil(b)).join(', ')}`);
         if (yield* this.handFallback(missing)) continue;
         // резерв: готовое на стройку не раздаём, но цепочку недостающего (и её сырьё) не блокируем — иначе тупик (сталь из железа)
-        const chain = new Set<string>(); const add = (x: string, d = 0) => { if (chain.has(x) || d > 8) return; chain.add(x); const rr = Object.values(RECIPES).find(q => q.out[0][0] === x); if (rr) for (const [i] of rr.in) add(i, d + 1); };
+        const chain = new Set<string>(); const add = (x: string, d = 0) => { if (chain.has(x) || d > 8) return; chain.add(x); const rr = Object.values(RECIPES).find(q => q.out[0]?.[0] === x); if (rr) for (const [i] of rr.in) add(i, d + 1); };
         for (const x in missing) add(x);
         this.reserved = { ...need, ...missing }; this.wantChain = chain;
         const did = yield* this.round(); yield did ? 120 : 1200; continue;
@@ -299,13 +342,20 @@ export class Factory extends Bot {
     if (mine.some(p => near(p.x, p.y))) return;
     // ближайшая пара «свой столб — чужой столб»
     let a = mine[0], bd = Infinity; for (const p of mine) for (const q of others) { const d = Math.hypot(p.x - q.x, p.y - q.y); if (d < bd) { bd = d; a = p; } }
-    yield* this.poleLine(a.x, a.y, near);
+    yield* this.poleLine(a.x, a.y, near, others.map(p => [p.x, p.y] as XY));
   }
   /** линия столбов от (sx,sy) до клетки, где goal(x,y) */
-  *poleLine(sx: number, sy: number, goal: (x: number, y: number) => boolean): Task {
-    const pl = this.plan; const ok = (x: number, y: number) => pl.freeTile(x, y) && !this.g.world.res(x, y) || (x === sx && y === sy);
-    const ok2 = (x: number, y: number) => pl.freeTile(x, y) || (x === sx && y === sy);
-    let path = this.tilePath(sx, sy, goal, ok); if (!path) path = this.tilePath(sx, sy, goal, ok2);
+  *poleLine(sx: number, sy: number, goal: (x: number, y: number) => boolean, targets: XY[]): Task {
+    const pl = this.plan;
+    const start = (x: number, y: number) => x === sx && y === sy;
+    const buildable = (x: number, y: number) => start(x, y) || (pl.freeTile(x, y)
+      && creepAt(this.g, x, y) < CREEP_BLOCK
+      && this.g.canPlace(POLE, x, y, 0, false).ok);
+    const ok = (x: number, y: number) => buildable(x, y) && (start(x, y) || !this.g.world.res(x, y));
+    const ok2 = (x: number, y: number) => buildable(x, y);
+    const distance = targets.reduce((d, [x, y]) => Math.min(d, Math.abs(x - sx) + Math.abs(y - sy)), Infinity);
+    const routeLimit = Number.isFinite(distance) ? Math.min(1000000, Math.max(200000, Math.ceil((distance / 2 + 1) ** 2 * 2.5))) : 200000;
+    let path = this.tilePath(sx, sy, goal, ok, routeLimit, targets); if (!path) path = this.tilePath(sx, sy, goal, ok2, routeLimit, targets);
     if (!path) throw new BotError(`нет трассы для столбов от ${sx},${sy}`);
     const pts: XY[] = []; let last: XY = [sx, sy];
     for (let i = 1; i < path.length; i++) {
@@ -320,12 +370,27 @@ export class Factory extends Bot {
     this.log(`линия столбов: ${pts.length} шт.`);
   }
   /** путь по клеткам (4-связный) через ok-клетки */
-  tilePath(sx: number, sy: number, goal: (x: number, y: number) => boolean, ok: (x: number, y: number) => boolean, limit = 200000): XY[] | null {
-    const prev = new Map<number, number>(); const q: number[] = [key(sx, sy)]; prev.set(q[0], -1); let qi = 0;
-    while (qi < q.length && qi < limit) {
-      const k = q[qi++]; const [x, y] = unkey(k);
+  tilePath(sx: number, sy: number, goal: (x: number, y: number) => boolean, ok: (x: number, y: number) => boolean, limit = 200000, targets: XY[] = []): XY[] | null {
+    const prev = new Map<number, number>(), cost = new Map<number, number>(), heap = new RouteHeap(); const start = key(sx, sy);
+    const h = (x: number, y: number): [number, number] => {
+      if (!targets.length) return [0, 0];
+      let d = Infinity, tie = Infinity;
+      for (const [tx, ty] of targets) {
+        const dx = Math.abs(x - tx), dy = Math.abs(y - ty), md = dx + dy, td = 2 * dx + dy;
+        if (md < d || (md === d && td < tie)) { d = md; tie = td; }
+      }
+      return [Math.max(0, d - 11), tie]; // goal points are within 7.4 tiles of a target pole
+    };
+    const [startH, startTie] = h(sx, sy); prev.set(start, -1); cost.set(start, 0); heap.push(startH, startTie, start, 0); let visited = 0;
+    while (heap.size && visited < limit) {
+      const [, , k, g] = heap.pop()!; if (cost.get(k) !== g) continue; visited++;
+      const [x, y] = unkey(k);
       if (goal(x, y)) { const p: XY[] = []; for (let c = k; c !== -1; c = prev.get(c)!) p.push(unkey(c)); return p.reverse(); }
-      for (let d = 0; d < 4; d++) { const nx = x + DX[d], ny = y + DY[d], nk = key(nx, ny); if (prev.has(nk) || !ok(nx, ny)) continue; prev.set(nk, k); q.push(nk); }
+      for (let d = 0; d < 4; d++) {
+        const nx = x + DX[d], ny = y + DY[d], nk = key(nx, ny), ng = g + 1;
+        if (ng >= (cost.get(nk) ?? Infinity) || !ok(nx, ny)) continue;
+        const [nh, tie] = h(nx, ny); cost.set(nk, ng); prev.set(nk, k); heap.push(ng + nh, tie, nk, ng);
+      }
     }
     return null;
   }

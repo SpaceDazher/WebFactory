@@ -1,0 +1,55 @@
+{
+  "status": "physical chain completed; final release verification still pending",
+  "method": "Ordinary UI input controlled by Codex through native Chrome, authoritative Worker reads only; no inventory, counters, position or Game.step assigned.",
+  "scope": "Actual atomic challenge, ore mined and transported, cells assembled, blueprint built, pump water routed, 100 standard radars supplied for 60 seconds, five cells burned, five waste cells physically reprocessed.",
+  "limitations": "This is an agent-operated UI playtest, not a human timing study. One death from mining radioactive ore, followed by ordinary respawn. Two UI error reports came from invalid read-only powerNets debug queries. Original build marked the consume goal early; the completion bug was then fixed with a separate imported-scenario RED/GREEN test. Browser restart cleared its isolated context; the exact UI slot save was recovered from this task original tool-output log.",
+  "tick": 225476,
+  "gameMinutes": 62.632222222222225,
+  "version": "1.16.0-rc.7",
+  "hash": "6aad6755901ea03",
+  "goals": {
+    "t0": 0,
+    "done": [
+      89820,
+      68670,
+      182850,
+      218040
+    ],
+    "res": {
+      "ok": true,
+      "tick": 218040
+    },
+    "pr": [
+      "100/100",
+      "10/10",
+      "30/30 · 60/60",
+      "5/5"
+    ]
+  },
+  "cheats": false,
+  "mode": 0,
+  "entities": 305,
+  "nuclear": {
+    "zones": [],
+    "st": {
+      "acid": 181,
+      "ore": 181,
+      "rods": 20,
+      "heatBase": 40000000000.0047,
+      "lost": 205534650,
+      "burned": 5,
+      "spent": 5,
+      "steamJ": 23715428006,
+      "turbJ": 23403443.485620394,
+      "reproc238": 3,
+      "reprocCells": 5
+    }
+  },
+  "centrifuge": {
+    "recipe": "nuclear-fuel-reprocessing",
+    "output": {
+      "uranium-238": 3
+    }
+  },
+  "evidence": "docs/manual-atomic-v116.z7save"
+}

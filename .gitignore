@@ -1,3 +1,13 @@
 node_modules
 dist
 shots
+logs/
+integration-logs/
+artifacts/
+*.log
+*.zip
+*.tgz
+.env
+.env.*
+!.env.example
+native/relay-public/downloads/

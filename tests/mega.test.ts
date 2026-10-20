@@ -3,6 +3,9 @@
 // 4) бесконечные исследования; 5) заметки на карте, сохранение v13 и миграция; 6) профайлер.
 import fs from 'fs';
 import zlib from 'zlib';
+import { createHash } from 'node:crypto';
+import assert from 'node:assert/strict';
+import { newV117State } from '../src/sim/v117';
 import { Game, Entity } from '../src/sim/game';
 import { serialize, deserialize, stateHash, SAVE_VERSION } from '../src/sim/save';
 import { OPT, setOpt, OptKey } from '../src/sim/perf';
@@ -20,6 +23,22 @@ const ok = (c: any, m: string) => { console.log((c ? '  ✔ ' : '  ✘ ') + m); 
 const unpack = (s: string) => JSON.parse(zlib.inflateSync(Buffer.from(s.trim().slice(1), 'base64')).toString());
 const SAVES = 'tests/saves/';
 const QUICK = !!process.env.MEGA_QUICK;
+
+/** Project only explicitly asserted migration defaults before the immutable old hashes. */
+function legacy117Save(g: Game): any {
+  const o: any = serialize(g), defaults = newV117State();
+  defaults.inventory.expanded = [96];
+  defaults.melee['player-1'] = { weapon: null, charges: 0, cooldown: 0, windup: 0, facing: 0, attackId: 0, hit: false };
+  assert.deepEqual(o.v117, defaults, 'legacy golden world must have only untouched1.17 defaults');
+  assert.deepEqual(o.poleReceipts, {}, 'legacy fixture has no new pole gestures');
+  assert.equal(o.inv.length, 96); assert.ok(o.inv.slice(80).every((s: unknown) => s === null), 'migration adds sixteen empty slots only');
+  assert.ok(o.research.done.includes('inventory-expansion-1') && o.research.done.includes('inventory-expansion-2'));
+  o.inv = o.inv.slice(0, 80);
+  o.research = { ...o.research, done: o.research.done.filter((id: string) => !['inventory-expansion-1', 'inventory-expansion-2'].includes(id)) };
+  o.enabled = o.enabled.filter((id: string) => id !== 'melee-crowbar');
+  delete o.v117; delete o.poleReceipts;
+  return o;
+}
 
 function rng(seed: number) { let s = seed >>> 0; return () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 
@@ -73,15 +92,22 @@ console.log('1. Приёмы ускорения не меняют результ
   }
 }
 
-console.log('2. Совпадение с v1.8: те же партии дают то же состояние (хэш без новых полей формата 13)');
+console.log('2. Совпадение с исходными эталонами: v1.8 и известный v1.15 для позднего архива (без новых полей формата 13)');
 {
   // эталон посчитан кодом v1.8 (tools/_xv2 в папке v1.8): 2×900 тиков; новые поля (pstats, notes, nextNote, номера версий) из хэша исключены
+  // Сохраняем исходные ожидания v1.8 для аудита. README v1.15 уже фиксирует, что поздний сейв перестал совпадать с v1.8 в 1.14.1; для неизменённого архивного файла проверяем кодовую базу против независимого эталона 1.15.
   const V18: Record<string, string[]> = { 'v1.8-late': ['49a0a75747a67409', '35e83dd75afac3cf'], 'v1.8-mid': ['482bee50240bde70', '96629e5edeefef08'], 'rc1-silo': ['35af0dcee015d7ca', 'a4be128c18abb3b4'] };
-  const h = (g: Game) => { const o: any = serialize(g); for (const k of ['pstats', 'notes', 'nextNote', 'mods', 'version', 'v', 'ver']) delete o[k]; if (o.tele) o.tele = { ...o.tele, sessions: undefined, mods: undefined }; const st = JSON.stringify(o); let h1 = 0x811c9dc5, h2 = 0x01000193; for (let i = 0; i < st.length; i++) { const c = st.charCodeAt(i); h1 = Math.imul(h1 ^ c, 16777619); h2 = Math.imul(h2 + c, 2654435761); } return (h1 >>> 0).toString(16) + (h2 >>> 0).toString(16); };
+  const V115_LATE_SHA256 = '0ed0cab62d991bccaf723127ee7a1468698ae7b64dbdbdadb1d0994e6e38ad79';
+  const V115_LATE = ['3174d492ab8772a', '2a11bfd44fdb84c0'];
+  const NEW114 = new Set(["explosives", "shotgun", "combat-shotgun", "rocket-launcher", "flamethrower", "laser-rifle", "shotgun-shell", "piercing-shotgun-shell", "rocket", "explosive-rocket", "flamethrower-ammo", "laser-cell", "cannon-shell", "explosive-cannon-shell", "artillery-shell", "railgun-dart", "light-armor", "heavy-armor", "assault-armor", "modular-armor", "power-armor", "power-armor-mk2", "solar-panel-equipment", "fusion-reactor-equipment", "fusion-reactor-mk2-equipment", "battery-equipment", "battery-mk2-equipment", "energy-shield-equipment", "energy-shield-mk2-equipment", "personal-laser-defense-equipment", "personal-laser-defense-mk2-equipment", "personal-rocket-equipment", "combat-drone-equipment", "personal-roboport-mk2-equipment", "exoskeleton-equipment", "exoskeleton-mk2-equipment", "laser-turret", "flamethrower-turret", "rocket-turret", "tesla-turret", "mortar-turret", "artillery-turret", "railgun-turret", "artillery-wagon", "concrete-wall", "composite-wall", "gate", "concrete-gate", "composite-gate", "rail-gate", "landfill", "white-tile", "hazard-concrete", "red-concrete", "blue-concrete", "green-concrete", "metal-deck", "paving-stone", "oil-generator", "gas-turbine", "flare-stack", "small-tank", "large-tank"]);
+  const h = (g: Game) => { const o: any = legacy117Save(g); for (const k of ['pstats', 'notes', 'nextNote', 'mods', 'scripts', 'version', 'v', 'ver', 'mpPerm', 'bpLib', 'nextBpLib', 'shots', 'fires', 'acids', 'sw', 'mut', 'mutT', 'ach', 'scn', 'scnSt', 'nuc', 'x', 'bioCorpses', 'nextBioCorpseId']) delete o[k]; /* v1.17: omit only the untouched empty fleet added by migration */ if (Array.isArray(o.bioRobots) && o.bioRobots.length === 0 && o.nextBioRobot === 1) { delete o.bioRobots; delete o.nextBioRobot; } if (o.player) { delete o.player.kit; delete o.player.bioSampling; } if (o.settings?.genv === 1) delete o.settings.genv; /* explicit default for pre-v1.16 worlds */ /* поля формата 18 (1.16): доли энергии пара, кислотный бак бура и диагностика добычи */ if (Array.isArray(o.ents)) o.ents = o.ents.map((e: any) => { const { fse, dc, dh, pendIt, lastOre, ...r } = e; if (r.ffluid?.length === 1 && r.ffluid[0] === 'sulfuric-acid' && !r.famt?.[0]) { delete r.famt; delete r.ffluid; } return r; }); if (Array.isArray(o.chunks)) o.chunks = o.chunks.map((c: any) => c.length === 7 ? (c[2].length || c[3].length || c[4].length || c[5] ? c.slice(0, c[5] || c[4].length ? 6 : 4) : [c[0], c[1]]) : c); /* счётчики 1.15 в stats */ if (o.stats) o.stats = Object.fromEntries(Object.entries(o.stats).filter(([k]) => !['pol', 'hcl'].includes(k))); /* поля формата 17 (1.14) */ if (Array.isArray(o.enabled)) o.enabled = o.enabled.filter((r: string) => !NEW114.has(r)); /* рецепты 1.14 */ if (Array.isArray(o.peers)) o.peers = o.peers.map((p: any) => { const { role, off, offAt, key, ...r } = p; if (r.player) { r.player = { ...r.player }; delete r.player.bioSampling; } return r; }); /* поля формата 16 (1.13) */ if (o.tele) o.tele = { ...o.tele, sessions: undefined, mods: undefined }; const st = JSON.stringify(o); let h1 = 0x811c9dc5, h2 = 0x01000193; for (let i = 0; i < st.length; i++) { const c = st.charCodeAt(i); h1 = Math.imul(h1 ^ c, 16777619); h2 = Math.imul(h2 + c, 2654435761); } return (h1 >>> 0).toString(16) + (h2 >>> 0).toString(16); };
   for (const [f, exp] of Object.entries(QUICK ? { 'v1.8-mid': V18['v1.8-mid'] } : V18)) {
+    const fixtureSha = createHash('sha256').update(fs.readFileSync(SAVES + f + '.z7save')).digest('hex');
+    if (f === 'v1.8-late' && fixtureSha !== V115_LATE_SHA256) { ok(false, `${f}: fixture changed (${fixtureSha}); pinned v1.15 reference is not applicable`); continue; }
     const g = deserialize(unpack(fs.readFileSync(SAVES + f + '.z7save', 'utf8'))); const got: string[] = [];
     for (let k = 0; k < 2; k++) { for (let i = 0; i < 900; i++) g.step(); got.push(h(g)); }
-    ok(got.join() === exp.join(), `${f}: 30 с игры — совпадает с v1.8 (${got.join(' ')})`);
+    const reference = f === 'v1.8-late' ? V115_LATE : exp, source = f === 'v1.8-late' ? 'v1.15 (SHA-256-pinned fixture)' : 'v1.8';
+    ok(got.join() === reference.join(), `${f}: 30 с игры — совпадает с ${source} (${got.join(' ')})`);
   }
 }
 

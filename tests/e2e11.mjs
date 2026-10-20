@@ -1,15 +1,16 @@
 // E2E rc3: инструменты бета-теста — статистика партии (в Worker и в главном потоке), файл статистики,
 // окно «Отчёт об ошибке» с журналом и строкой сохранения, загрузка партии из отчёта, перевод окон на EN.
-import { chromium } from 'playwright';
+import { launchBrowser, selectedBrowser, appUrl, projectRoot } from './browser.mjs';
 import fs from 'fs';
+const EXPECT_BROWSER = { chromium: 'Chrome', firefox: 'Firefox', webkit: 'Safari' }[process.env.PW_BROWSER || process.argv[2] || 'chromium'] || 'Chrome'; // тест идёт в матрице браузеров
 const require_version = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
-const b = await chromium.launch({ executablePath: '/usr/local/bin/chromium', args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--use-gl=angle'] });
+const b = await launchBrowser(selectedBrowser(), { args: ['--enable-unsafe-swiftshader', '--use-gl=angle'] });
 let fails = 0; const errs = [];
 const ok = (c, m) => { console.log((c ? '  ✔ ' : '  ✘ ') + m); if (!c) fails++; };
 const ctx = await b.newContext({ viewport: { width: 1600, height: 900 }, locale: 'ru-RU', acceptDownloads: true });
 const p = await ctx.newPage();
 p.on('pageerror', e => errs.push('PAGEERROR ' + e.message));
-await p.goto('file:///data/game/dist/index.html');
+await p.goto(appUrl(import.meta.url));
 await p.waitForFunction(() => window.__texMs != null && window.__zavod && window.__zavod.sim && window.__zavod.sim.snaps > 2, null, { timeout: 180000 });
 await p.evaluate(() => { const z = window.__zavod; z.ui.h.newGame(4242, 'normal'); z.ui.close(); });
 await p.waitForTimeout(500);
@@ -43,7 +44,7 @@ await p.screenshot({ path: 'shots/rc3-beta-stats.png' });
 const [dl] = await Promise.all([p.waitForEvent('download'), p.evaluate(() => document.querySelector('[data-act="teleexport"]').dispatchEvent(new MouseEvent('mousedown', { bubbles: true })))]);
 const fpath = 'shots/rc3-playtest.json'; await dl.saveAs(fpath); const file = JSON.parse(fs.readFileSync(fpath, 'utf8'));
 ok(/^zavod7-playtest-4242-.*\.json$/.test(dl.suggestedFilename()), 'имя файла: ' + dl.suggestedFilename());
-ok(file.client && file.client.version === require_version && file.client.system.browser.startsWith('Chrome') && file.client.system.worker === true, `клиентская часть: v${file.client?.version}, ${file.client?.system.browser}, ${file.client?.system.renderer}`);
+ok(file.client && file.client.version === require_version && file.client.system.browser.startsWith(EXPECT_BROWSER) && file.client.system.worker === true, `клиентская часть: v${file.client?.version}, ${file.client?.system.browser}, ${file.client?.system.renderer}`);
 ok(!JSON.stringify(file).includes('Mozilla/5.0'), 'полная строка User-Agent в файл не попадает');
 ok(file.samples.length >= 1 && file.samplesCols.length === file.samples[0].length, 'срезы раз в 5 минут с заголовками колонок');
 ok(file.client.windows.beta && file.client.windows.beta.n >= 1, 'первое открытие окон записано');
@@ -75,7 +76,7 @@ ok(rep.includes('Пропал конвейер после загрузки') && 
 ok(rep.includes('test-error-xyz') && /ERROR/.test(rep), 'ошибка из консоли — в журнале отчёта');
 ok(/GAME\s+t\d+ /.test(rep) && rep.includes('new game: seed 4242'), 'сообщения игры и события сессии — в журнале');
 ok(rep.includes('-----BEGIN ZAVOD7 SAVE-----') && rep.includes('-----END ZAVOD7 SAVE-----'), 'строка сохранения приложена');
-ok(/browser: Chrome/.test(rep) && /renderer: /.test(rep) && /seed 4242/.test(rep), 'система и партия в отчёте');
+ok(new RegExp('browser: ' + EXPECT_BROWSER).test(rep) && /renderer: /.test(rep) && /seed 4242/.test(rep), 'система и партия в отчёте');
 await p.screenshot({ path: 'shots/rc3-bug-report.png' });
 const [dl2] = await Promise.all([p.waitForEvent('download'), p.evaluate(() => document.querySelector('[data-act="bugfile"]').dispatchEvent(new MouseEvent('mousedown', { bubbles: true })))]);
 await dl2.saveAs('shots/rc3-bug.txt'); ok(fs.readFileSync('shots/rc3-bug.txt', 'utf8') === rep && dl2.suggestedFilename().endsWith('.txt'), 'отчёт сохраняется в .txt');
@@ -92,7 +93,7 @@ ok(after.seed === before.seed && after.n === before.n && Math.abs(after.tick - b
 
 console.log('6. Главный поток (?local) и английский');
 const p2 = await ctx.newPage(); p2.on('pageerror', e => errs.push('PAGEERROR ' + e.message));
-await p2.goto('file:///data/game/dist/index.html?local=1');
+await p2.goto(appUrl(import.meta.url, '?local=1'));
 await p2.waitForFunction(() => window.__texMs != null && window.__zavod, null, { timeout: 180000 });
 await p2.waitForTimeout(2500); // при старте игра может догрузить последнее сохранение — ждём, чтобы оно не перекрыло новую партию
 await p2.evaluate(async () => { const z = window.__zavod; z.ui.h.setSettings({ lang: 'en' }); await z.ui.h.newGame(5, 'normal'); z.ui.close(); });

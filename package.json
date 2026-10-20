@@ -1,23 +1,42 @@
 {
   "name": "zavod-7",
-  "version": "1.10.0",
+  "version": "1.17.0-dev.1",
   "private": true,
   "description": "ЗАВОД-7 — 2D factory-builder в браузере (M0–M10: Worker-симуляция, RU/EN, PWA; Chrome 80+, Firefox 113+, Safari 16.4+)",
   "type": "module",
   "scripts": {
     "build": "node build.mjs --min",
     "build:dev": "node build.mjs",
+    "native:deps": "npm ci --prefix native/rtc-runtime --ignore-scripts --no-audit --no-fund",
+    "native:build": "npm run native:deps && node build.mjs --min && node native/package.mjs",
+    "native:server": "npm run native:deps && node build.mjs --min && node native/package.mjs --server-only",
     "typecheck": "tsc -p .",
-    "test": "tsx tests/sim.test.ts && tsx tests/core19.test.ts && tsx tests/m5.test.ts && tsx tests/m8m9.test.ts && tsx tests/compat.test.ts && tsx tests/stats.test.ts && tsx tests/robots.test.ts && tsx tests/logistics.test.ts && tsx tests/storage.test.ts && tsx tests/circuits.test.ts && tsx tests/circuits2.test.ts && tsx tests/rails.test.ts && tsx tests/rails2.test.ts && RAILNET_HOURS=1 tsx tests/railnet.test.ts && tsx tests/mp.test.ts && MEGA_QUICK=1 tsx tests/mega.test.ts && tsx tests/mods.test.ts && tsx tools/i18n-check.ts",
+    "test:nuclear-long": "tsx tests/nuclear-long.test.ts",
+    "test": "tsx tests/sim.test.ts && tsx tests/v117-biomaterials.test.ts && tsx tests/v117-alpha2-chain.test.ts && tsx tests/v117-alpha3-materials.test.ts && tsx tests/v117-alpha4-collection.test.ts && tsx tests/v117-alpha5-flyer.test.ts && tsx tests/v117-combat-contracts.test.ts && tsx tests/core19.test.ts && tsx tests/m5.test.ts && tsx tests/m8m9.test.ts && tsx tests/compat.test.ts && tsx tests/stats.test.ts && tsx tests/robots.test.ts && tsx tests/logistics.test.ts && tsx tests/storage.test.ts && tsx tests/circuits.test.ts && tsx tests/circuits2.test.ts && tsx tests/rails.test.ts && tsx tests/rails2.test.ts && tsx tests/fluid-underground-crossing.test.ts && cross-env RAILNET_HOURS=1 tsx tests/railnet.test.ts && tsx tests/mp.test.ts && tsx tests/mp2.test.ts && tsx tests/mp-snapshot-regression.test.ts && cross-env MEGA_QUICK=1 tsx tests/mega.test.ts && tsx tests/mods.test.ts && tsx tests/scripts.test.ts && tsx tests/v111.test.ts && tsx tests/v114.test.ts && tsx tests/v1141.test.ts && tsx tests/v115.test.ts && tsx tests/heat-component-index.test.ts && tsx tests/heat-local-rebuild.test.ts && tsx tests/heat-delta-storage.test.ts && tsx tests/heat-loss-register.test.ts && tsx tests/heat-packed-slots.test.ts && tsx tests/heat-fused-commit.test.ts && tsx tests/heat-node-slots.test.ts && tsx tests/heat-pipe-rows.test.ts && tsx tests/heat-node-record.test.ts && tsx tests/heat-explosion-batch.test.ts && tsx tests/power-rebuild-coverage.test.ts && tsx tests/fluid-rebuild-parallel-scratch.test.ts && tsx tests/v116.test.ts && tsx tests/uranium-drill.test.ts && tsx tests/v116b.test.ts && tsx tests/x116-stash-validation.test.ts && tsx tests/v116c.test.ts && tsx tests/v116d.test.ts && tsx tests/v116vehicle.test.ts && tsx tests/vehicle-save-validation.test.ts && tsx tests/rail-v116.test.ts && tsx tests/world-v116.test.ts && tsx tests/v116-ui-geometry.test.ts && tsx tests/gpu-v116.test.ts && tsx tests/bot-lifecycle.test.ts && tsx tests/bot-power-route.test.ts && tsx tests/bot-water-route.test.ts && tsx tests/botdef.test.ts && tsx tests/diagnostic-v116.test.ts && tsx tests/render-fx-v116.test.ts && tsx tests/nuclear-mp-8.test.ts && tsx tools/i18n-check.ts",
+    "test:alpha2": "tsx tests/v117-alpha2-chain.test.ts",
     "test:railnet": "tsx tests/railnet.test.ts",
     "chaos": "tsx tests/chaos.test.ts",
     "saves": "tsx tools/oldsaves.ts",
     "bench": "tsx tests/bench.ts",
     "balance": "tsx tools/balance.ts",
     "bot": "tsx tools/bot/run.ts",
+    "test:perf": "tsx tests/perflevels.test.ts",
     "mpbot": "tsx tools/mp-bot.ts",
     "signal": "node tools/signal-server.mjs",
-    "e2e": "node tests/e2e5.mjs && node tests/e2e6.mjs && node tests/e2e7.mjs && node tests/e2e8.mjs && node tests/e2e9.mjs && node tests/e2e10.mjs && node tests/e2e11.mjs && tsx tests/e2e12.mjs && node tests/e2e13.mjs && node tests/e2e14.mjs && node tests/e2e15.mjs && node tests/e2e16.mjs && node tests/e2e17.mjs && node tests/e2e18.mjs && node tests/e2e19.mjs && node tests/e2e20.mjs && node tests/e2e21.mjs && node tests/e2e22.mjs && node tests/e2e23.mjs && node tests/e2e24.mjs"
+    "e2e": "node tests/e2e-runner.mjs",
+    "test:gpu-context": "node tests/gpu-context-v116.mjs",
+    "test:alpha3": "tsx tests/v117-alpha3-materials.test.ts",
+    "test:alpha4": "tsx tests/v117-alpha4-collection.test.ts",
+    "test:alpha5": "tsx tests/v117-alpha5-flyer.test.ts",
+    "test:combat117": "tsx tests/v117-combat-contracts.test.ts",
+    "test:native117": "node --import tsx tests/native-bootstrap-v117.mjs"
   },
-  "devDependencies": { "esbuild": "^0.25.0", "typescript": "^5.6.0", "tsx": "^4.19.0", "playwright": "^1.48.0" }
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "cross-env": "^7.0.3",
+    "esbuild": "^0.25.0",
+    "playwright": "1.62.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
 }

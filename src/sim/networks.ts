@@ -1,13 +1,26 @@
 // Электросети (8.5, union-find) и жидкостные сети (8.6, «одна сеть — один бак»).
-import { DX, DY, rotLocal } from '../core/types';
+import { DX, DY, TICKS, rotLocal } from '../core/types';
 import { PROTOS } from '../data/entities';
+import { powerLevel } from './mgmt';
 import type { Entity, Game } from './game';
 import { energyMul } from './modules';
+import { fluidConnections } from './fluidports';
 import { OPT, powerList } from './perf';
+import { SE_BOILER, SE_HOT } from './steam-energy';
 
-export interface PowerNet { id: number; poles: number[]; demand: number; supply: number; satisfaction: number; load: number; hist: { d: number; s: number }[];
+export interface PowerNet { id: number; poles: number[]; demand: number; supply: number; satisfaction: number; /** v1.16: удовлетворённость по уровням приоритета [критический, обычный, второстепенный] и спрос уровней, кВт (нет приоритетов — undefined) */ sl?: [number, number, number]; dl?: [number, number, number]; load: number; hist: { d: number; s: number }[];
   stored?: number; storeCap?: number; accFlow?: number; solar?: number; steam?: number; }
-export interface FluidNet { id: number; fluid: string | null; amount: number; cap: number; nodes: [number, number][]; conflict: boolean; filtered?: boolean; }
+export interface FluidNet { id: number; fluid: string | null; amount: number; cap: number; nodes: [number, number][]; conflict: boolean; filtered?: boolean;
+  /** v1.16: удельная энергия пара, кДж/ед (165 °C = 30, 500 °C = 97); у пустого бака не используется */ se: number; }
+/** обычный пар бойлера (165 °C) — кДж на единицу */
+export { SE_BOILER, SE_HOT } from './steam-energy';
+/** добавить u единиц пара с удельной энергией se в сеть net (энергия суммируется, температура — средневзвешенная по объёму) */
+export function addSteam(net: FluidNet, u: number, se: number) {
+  if (u <= 0) return;
+  const cur = net.fluid === 'steam' ? net.amount : 0;
+  net.se = Math.round((cur * (cur > 0 ? net.se : 0) + u * se) / (cur + u) * 1e6) / 1e6;
+  net.amount += u; net.fluid = 'steam';
+}
 
 export function isElectric(e: Entity) { const p = PROTOS[e.proto]; return p.energy?.kind === 'electric' || p.type === 'engine' || p.type === 'solar' || p.type === 'accumulator'; }
 
@@ -47,38 +60,72 @@ export function rebuildPower(g: Game) {
     if (!n) { const o = old.get(r); n = { id: r, poles: [], demand: 0, supply: 0, satisfaction: o ? o.satisfaction : 0, load: 0, hist: o ? o.hist : [] }; g.powerNets.set(r, n); }
     n.poles.push(p.id); p._net = r;
   }
-  for (const p of poles) {
-    const s = PROTOS[p.proto].supply!;
-    for (let y = p.y - s; y <= p.y + p.h - 1 + s; y++) for (let x = p.x - s; x <= p.x + p.w - 1 + s; x++) {
-      const e = g.entAt(x, y);
-      if (e && e._net === -1 && isElectric(e)) e._net = p._net!;
+  g.world.withOccChunkCache(() => {
+    for (const p of poles) {
+      const s = PROTOS[p.proto].supply!;
+      for (let y = p.y - s; y <= p.y + p.h - 1 + s; y++) for (let x = p.x - s; x <= p.x + p.w - 1 + s; x++) {
+        const e = g.entAt(x, y);
+        if (e && e._net === -1 && isElectric(e)) e._net = p._net!;
+      }
     }
-  }
+  });
 }
 
 /** Порядок за тик (8.5): спрос → солнце → аккумуляторы → пар. Излишек заряжает аккумуляторы,
  *  паровые двигатели работают только на «спрос + заряд» — топливо не тратится зря. */
+/** v1.16: электрическая мощность паровых турбин за последний тик, кВт */
+let TKW = 0; export const turbineKW = () => TKW;
+interface PowerWork { D: number; S: number; E: number; eng: Entity[]; acc: Entity[]; sol: Entity[]; L: [number, number, number]; loads: Entity[]; loadKW: number[]; }
+interface PowerScratch {
+  powerVer: number; per: Map<number, PowerWork>; engs: Entity[]; needByFluid: Map<number, number>;
+}
+const powerScratch = new WeakMap<Game, PowerScratch>();
+function scratchFor(g: Game): PowerScratch {
+  let s = powerScratch.get(g);
+  if (!s || s.powerVer !== g.powerVer) {
+    s = { powerVer: g.powerVer, per: new Map(), engs: [], needByFluid: new Map() };
+    powerScratch.set(g, s);
+  }
+  return s;
+}
+function workFor(s: PowerScratch, id: number): PowerWork {
+  let n = s.per.get(id);
+  if (!n) { n = { D: 0, S: 0, E: 0, eng: [], acc: [], sol: [], L: [0, 0, 0], loads: [], loadKW: [] }; s.per.set(id, n); }
+  else { n.D = 0; n.S = 0; n.E = 0; n.eng.length = 0; n.acc.length = 0; n.sol.length = 0; n.L[0] = n.L[1] = n.L[2] = 0; n.loads.length = 0; n.loadKW.length = 0; }
+  return n;
+}
 export function stepPower(g: Game) {
+  TKW = 0;
   const day = g.daylight();
-  const per = new Map<number, { D: number; S: number; E: number; eng: Entity[]; acc: Entity[]; sol: Entity[] }>();
-  for (const n of g.powerNets.values()) per.set(n.id, { D: 0, S: 0, E: 0, eng: [], acc: [], sol: [] });
-  // v1.9: энергия для статистики (кДж за тик): потребление — по удовлетворённости сети на прошлом тике
+  const scratch = scratchFor(g), per = scratch.per, engs = scratch.engs;
+  engs.length = 0;
+  for (const net of g.powerNets.values()) workFor(scratch, net.id);
+  // v1.16: потребление попадёт в статистику после расчёта фактической выдачи и доли каждого уровня приоритета.
   const ec = g.pstats.ec, ep = g.pstats.ep;
   for (const e of (OPT.powerLists ? powerList(g) : g.ents.values())) {
+    const p = PROTOS[e.proto];
+    if (e.t === 'bioport') e._bioKW = 0;
     if (e._net == null || e._net < 0) continue;
     const n = per.get(e._net); if (!n) continue;
-    const p = PROTOS[e.proto];
-    if (p.energy?.kind === 'electric') { const kw = e.active ? p.energy.kW * energyMul(g, e) : (p.energy.drainKW ?? p.energy.kW / 30); n.D += kw; ec[e.proto] = (ec[e.proto] || 0) + kw * (g.powerNets.get(e._net)?.satisfaction ?? 0) / 60; }
-    if (p.buffer) { const need = Math.max(0, (p.buffer.MJ * 1e6 - (e.charge || 0)) * 60 / 1000); e._rq = Math.min(p.buffer.kW, need); n.D += e._rq; ec[e.proto] = (ec[e.proto] || 0) + e._rq * (g.powerNets.get(e._net)?.satisfaction ?? 0) / 60; } // v1.2: буфер робопорта
-    else if (p.type === 'engine') {
-      const fn = g.fluidNets[e._fn![0]];
-      const steamPerTick = 0.5; // 30 пара/с при 900 кВт
-      const avail = fn && fn.fluid === 'steam' && !fn.conflict ? fn.amount : 0;
-      e._max = p.maxOut! * Math.min(1, avail / steamPerTick);
-      n.E += e._max; n.eng.push(e);
+    let load = false, kw = 0, bufferKW = 0, lv = 1;
+    if (p.energy?.kind === 'electric') {
+      const bioLabState = e.proto === 'genetic-lab' ? g.v117?.genetics?.labs?.[String(e.id)] : undefined;
+      const bioLabActive = !!bioLabState?.activity && bioLabState.progress < (bioLabState.activity.kind === 'found' ? 60 : 20) * TICKS;
+      kw = e.active || e._cut || bioLabActive || e.proto === 'programmable-speaker' && e._speakerRequested ? p.energy.kW * energyMul(g, e) : (p.energy.drainKW ?? p.energy.kW / 30);
+      if (e.proto === 'genetic-lab') kw += Object.values(g.v117?.genetics?.banks || {}).filter(b => b.labId === e.id && b.cells > 0).length * 5;
+      n.D += kw; lv = e.pp !== undefined || e.grp !== undefined ? powerLevel(g, e) : 1; e._lv = lv; n.L[lv] += kw; load = true;
+    }
+    if (p.buffer) { const need = Math.max(0, (p.buffer.MJ * 1e6 - (e.charge || 0)) * 60 / 1000); e._rq = Math.min(p.buffer.kW, need); n.D += e._rq; bufferKW = e._rq; load = true; } // v1.2: буфер робопорта
+    if (load) {
+      n.loads.push(e); n.loadKW.push(kw);
+    }
+    else if (p.type === 'engine') { engs.push(e); n.eng.push(e);
     } else if (p.type === 'solar') { e._max = p.maxOut! * day; n.S += e._max; n.sol.push(e); }
     else if (p.type === 'accumulator') n.acc.push(e);
   }
+  // v1.16: генераторы одной сети жидкости делят её запас — единицу пара нельзя выдать каждому как независимый резерв
+  genLimits(g, engs, scratch.needByFluid);
+  for (const e of engs) { if (e._net == null || e._net < 0) continue; const n = per.get(e._net); if (n) n.E += e._max!; }
   const J = (kW: number) => kW * 1000 / 60;
   for (const net of g.powerNets.values()) {
     const n = per.get(net.id)!;
@@ -97,22 +144,57 @@ export function stepPower(g: Game) {
     else if (accFlow < 0 && disCap > 0) for (const a of n.acc) { const A = PROTOS[a.proto].accum!; const c = a.charge || 0; const k = Math.min(A.kW, c / 1000 * 60) / disCap; a.charge = Math.max(0, c + J(accFlow * k)); a._out = accFlow * k; }
     else for (const a of n.acc) a._out = 0;
     const load = n.E > 0 ? eng / n.E : 0;
-    for (const e of n.eng) { e._out = e._max! * load; const fn = g.fluidNets[e._fn![0]]; if (fn) fn.amount = Math.max(0, fn.amount - e._out / 900 * 0.5); }
+    for (const e of n.eng) { e._out = e._max! * load; const fn = g.fluidNets[e._fn![0]]; if (fn) { const bf = PROTOS[e.proto].burnFluid; const mj = bf && fn.fluid ? bf.fuels[fn.fluid] || 0 : 0; const seU = bf ? 0 : steamUse(e, fn); e._wk = !bf && e._out > 0 && seU > 0 ? e._out / seU * Math.max(0, fn.se - seU) : 0; fn.amount = Math.max(0, fn.amount - (bf ? (mj ? e._out / (mj * bf.eff * 1000) / 60 : 0) : seU > 0 ? e._out / 60 / seU : 0)); } }
     for (const e of n.sol) e._out = n.S > 0 ? e._max! * solarUsed / n.S : 0;
-    for (const e of n.eng) if (e._out) ep[e.proto] = (ep[e.proto] || 0) + e._out / 60;
+    for (const e of n.eng) if (e._out) { ep[e.proto] = (ep[e.proto] || 0) + e._out / 60; if (PROTOS[e.proto].turbine) { TKW += e._out; g.nuc.st.turbJ = (g.nuc.st.turbJ || 0) + e._out / 60; } }
     for (const e of n.sol) if (e._out) ep[e.proto] = (ep[e.proto] || 0) + e._out / 60;
     for (const a of n.acc) if (a._out) { if (a._out > 0) ec[a.proto] = (ec[a.proto] || 0) + a._out / 60; else ep[a.proto] = (ep[a.proto] || 0) - a._out / 60; }
     net.demand = n.D; net.supply = n.S + n.E + disCap; net.satisfaction = sat;
+    // v1.16: приоритеты — сначала критический спрос, затем обычный, затем второстепенный; внутри уровня поровну (пропорционально запросу)
+    if (n.L[0] > 0 || n.L[2] > 0) { let rem = sat * n.D; const sl: [number, number, number] = [1, 1, 1]; const D1 = n.D - n.L[0] - n.L[2]; const lvD = [n.L[0], D1, n.L[2]]; for (let i = 0; i < 3; i++) { const give = Math.min(lvD[i], rem); sl[i] = lvD[i] > 1e-9 ? give / lvD[i] : 1; rem -= give; } net.sl = sl; net.dl = [lvD[0], lvD[1], lvD[2]]; } else { net.sl = undefined; net.dl = undefined; }
     net.load = net.supply > 0 ? Math.min(1, n.D / net.supply) : 0;
     net.stored = stored; net.storeCap = cap; net.accFlow = accFlow; net.solar = solarUsed; net.steam = eng;
+    for (let i = 0; i < n.loads.length; i++) {
+      const e = n.loads[i], p = PROTOS[e.proto], kw = n.loadKW[i];
+      if (kw) { const share = net.sl ? net.sl[e._lv ?? 1] : sat; const actualKW = kw * share; ec[e.proto] = (ec[e.proto] || 0) + actualKW / 60; if (e.t === 'bioport') e._bioKW = actualKW; }
+      if (p.buffer && e._rq) {
+        const share = net.sl ? net.sl[1] : sat;
+        ec[e.proto] = (ec[e.proto] || 0) + e._rq * share / 60;
+      }
+    }
     if (g.tick % 6 === 0) { net.hist.push({ d: n.D, s: net.supply }); if (net.hist.length > 100) net.hist.shift(); }
   }
 }
 
+/** v1.16: сколько кДж пара превращается в электричество с единицы: двигатель — не больше 30, турбина — не больше 97 */
+export function steamUse(e: Entity, fn: FluidNet) { return Math.min(fn.se || SE_BOILER, PROTOS[e.proto].turbine ? SE_HOT : SE_BOILER); }
+function genLimits(g: Game, engs: Entity[], needByFluid: Map<number, number>) {
+  needByFluid.clear();
+  for (const e of engs) {
+    const id = e._fn?.[0] ?? -1, fn = id >= 0 ? g.fluidNets[id] : undefined;
+    let um = 0;
+    if (fn && !fn.conflict && fn.fluid) {
+      const p = PROTOS[e.proto], bf = p.burnFluid;
+      if (bf) { const mj = bf.fuels[fn.fluid] || 0; if (mj) um = p.maxOut! / (mj * bf.eff * 1000) / 60; }
+      else if (fn.fluid === 'steam') um = p.maxOut! / (60 * (p.turbine ? SE_HOT : SE_BOILER));
+    }
+    needByFluid.set(id, (needByFluid.get(id) || 0) + um);
+  }
+  for (const e of engs) {
+    const id = e._fn?.[0] ?? -1, fn = id >= 0 ? g.fluidNets[id] : undefined;
+    let pw = 0;
+    if (fn && !fn.conflict && fn.fluid) {
+      const p = PROTOS[e.proto], bf = p.burnFluid;
+      if (bf) { const mj = bf.fuels[fn.fluid] || 0; if (mj) pw = p.maxOut!; }
+      else if (fn.fluid === 'steam') { const um = p.maxOut! / (60 * (p.turbine ? SE_HOT : SE_BOILER)); pw = 60 * um * steamUse(e, fn); }
+    }
+    const need = needByFluid.get(id) || 0;
+    e._max = pw * (need > 0 && fn ? Math.min(1, fn.amount / need) : 0);
+  }
+}
 /** Мировые клетки и направления всех соединений жидкостного бака */
 export function fluidConns(e: Entity, b: number): { x: number; y: number; d: number }[] {
-  const p = PROTOS[e.proto]; const box = p.fluid![b];
-  return box.conns.map(c => { const [lx, ly] = rotLocal(c.x, c.y, p.w, p.h, e.dir); return { x: e.x + lx, y: e.y + ly, d: (c.d + e.dir) % 4 }; });
+  return fluidConnections(e, b);
 }
 /** фильтр бака: у машин с рецептом — по рецепту; null у io-бака = бак не используется */
 export function boxFilter(e: Entity, b: number): string | null | false {
@@ -138,7 +220,10 @@ export function boxNeighbors(g: Game, e: Entity, b: number): [Entity, number][] 
   if (p.ugReach) { // подземная труба: ищем пару впереди
     for (let i = 1; i <= p.ugReach; i++) {
       const o = g.entAt(e.x + DX[e.dir] * i, e.y + DY[e.dir] * i);
-      if (o && o.proto === e.proto) { if (o.dir === (e.dir + 2) % 4) r.push([o, 0]); break; }
+      if (o && o.proto === e.proto && o.dir % 2 === e.dir % 2) {
+        if (o.dir === (e.dir + 2) % 4) r.push([o, 0]);
+        break;
+      }
     }
   }
   return r;
@@ -148,43 +233,105 @@ export function connectedNets(g: Game, e: Entity, b: number): number[] {
 }
 export function rebuildFluids(g: Game) {
   // собрать доли старых сетей
-  const share = new Map<string, { amt: number; fluid: string | null }>();
+  const share = new Map<number, { amt: number; fluid: string | null; se: number }>();
+  // v1.16 heat-17: numeric box keys and per-rebuild packed connection cache;
+  // triples retain the public fluidConns coordinate/direction arithmetic.
+  const connCache = new Map<number, (number | undefined)[]>();
+  const conns = (o: Entity, ob: number) => {
+    const k = o.id * 64 + ob;
+    let packed = connCache.get(k);
+    if (!packed) {
+      const p = PROTOS[o.proto], list = p.fluid![ob].conns;
+      packed = [];
+      // Array#map skips sparse source entries. Keep a marker for those slots:
+      // the consuming traversal then preserves map/for-of's prior error point.
+      for (let i = 0; i < list.length; i++) {
+        if (!(i in list)) { packed.push(undefined, undefined, undefined); continue; }
+        const c = list[i], [lx, ly] = rotLocal(c.x, c.y, p.w, p.h, o.dir);
+        packed.push(o.x + lx, o.y + ly, (c.d + o.dir) % 4);
+      }
+      connCache.set(k, packed);
+    }
+    return packed;
+  };
+  const neighbors = (ce: Entity, cb: number, outEntities: Entity[], outBoxes: number[]) => {
+    outEntities.length = 0; outBoxes.length = 0;
+    if (boxFilter(ce, cb) === false) return;
+    const cs = conns(ce, cb);
+    for (let ci = 0; ci < cs.length; ci += 3) {
+      const cx = cs[ci], cy = cs[ci + 1], cd = cs[ci + 2];
+      if (cx === undefined) { const missing: any = undefined; void missing.x; }
+      const nx = cx! + DX[cd!], ny = cy! + DY[cd!];
+      const o = g.entAt(nx, ny); if (!o || o === ce) continue;
+      const op = PROTOS[o.proto]; if (!op.fluid) continue;
+      for (let ob = 0; ob < op.fluid.length; ob++) {
+        if (boxFilter(o, ob) === false) continue;
+        const other = conns(o, ob), opposite = (cd! + 2) % 4;
+        let connected = false;
+        for (let oi = 0; oi < other.length; oi += 3) {
+          const ox = other[oi]; if (ox === undefined) continue;
+          if (ox === nx && other[oi + 1] === ny && other[oi + 2] === opposite) { connected = true; break; }
+        }
+        if (connected) { outEntities.push(o); outBoxes.push(ob); }
+      }
+    }
+    const p = PROTOS[ce.proto];
+    if (p.ugReach) {
+      for (let i = 1; i <= p.ugReach; i++) {
+        const o = g.entAt(ce.x + DX[ce.dir] * i, ce.y + DY[ce.dir] * i);
+        if (o && o.proto === ce.proto && o.dir % 2 === ce.dir % 2) {
+          if (o.dir === (ce.dir + 2) % 4) { outEntities.push(o); outBoxes.push(0); }
+          break;
+        }
+      }
+    }
+  };
   for (const e of g.ents.values()) {
     const p = PROTOS[e.proto]; if (!p.fluid) continue;
+    if (p.fluid.length >= 64) throw new Error('rebuildFluids: too many fluid boxes');
     p.fluid.forEach((box, b) => {
-      let amt = 0, fluid: string | null = null;
+      let amt = 0, fluid: string | null = null, se = SE_BOILER;
       if (e._clearFluid) { amt = 0; }
-      else if (e._fn && e._fn[b] != null && g.fluidNets[e._fn[b]]) { const n = g.fluidNets[e._fn[b]]; amt = n.cap > 0 ? n.amount * box.cap / n.cap : 0; fluid = n.fluid; }
-      else if (e.famt) { amt = e.famt[b] || 0; fluid = e.ffluid?.[b] ?? box.filter ?? null; }
-      share.set(e.id + ':' + b, { amt, fluid });
+      else if (e._fn && e._fn[b] != null && g.fluidNets[e._fn[b]]) { const n = g.fluidNets[e._fn[b]]; amt = n.cap > 0 ? n.amount * box.cap / n.cap : 0; fluid = n.fluid; se = n.se; }
+      else if (e.famt) { amt = e.famt[b] || 0; fluid = e.ffluid?.[b] ?? box.filter ?? null; if (e.fse && Number.isFinite(e.fse[b]) && e.fse[b] > 0) se = e.fse[b]; }
+      share.set(e.id * 64 + b, { amt, fluid, se });
     });
-    e.famt = undefined; e.ffluid = undefined; e._clearFluid = undefined;
+    e.famt = undefined; e.ffluid = undefined; e.fse = undefined; e._clearFluid = undefined;
   }
   const nets: FluidNet[] = [];
-  const seen = new Set<string>();
+  const seen = new Set<number>();
   for (const e of g.ents.values()) {
     const p = PROTOS[e.proto]; if (!p.fluid) continue;
     e._fn = p.fluid.map(() => -1);
   }
+  // Scratch arrays are per rebuild call, so nested rebuilds keep independent live traversal state.
+  const neighborEntities: Entity[] = [], neighborBoxes: number[] = [];
   for (const e of g.ents.values()) {
     const p = PROTOS[e.proto]; if (!p.fluid) continue;
     for (let b = 0; b < p.fluid.length; b++) {
-      const k = e.id + ':' + b; if (seen.has(k)) continue;
+      const k = e.id * 64 + b; if (seen.has(k)) continue;
       if (boxFilter(e, b) === false) continue;
-      const net: FluidNet = { id: nets.length, fluid: null, amount: 0, cap: 0, nodes: [], conflict: false };
+      const net: FluidNet = { id: nets.length, fluid: null, amount: 0, cap: 0, nodes: [], conflict: false, se: SE_BOILER };
+      let seNum = 0, seDen = 0;
       const filters = new Set<string>(); let anyFluid: string | null = null; let bestAmt = 0;
-      const stack: [Entity, number][] = [[e, b]]; seen.add(k);
-      while (stack.length) {
-        const [ce, cb] = stack.pop()!;
+      const stackEntities: Entity[] = [e], stackBoxes: number[] = [b]; seen.add(k);
+      while (stackEntities.length) {
+        const ce = stackEntities.pop()!, cb = stackBoxes.pop()!;
         const cp = PROTOS[ce.proto]; const box = cp.fluid![cb];
         net.nodes.push([ce.id, cb]); net.cap += box.cap; ce._fn![cb] = net.id;
         const bf = boxFilter(ce, cb); if (bf) filters.add(bf);
-        const sh = share.get(ce.id + ':' + cb); if (sh) { net.amount += sh.amt; if (sh.amt > 0.01 && sh.fluid) { if (!anyFluid || sh.amt > bestAmt) { anyFluid = sh.fluid; bestAmt = sh.amt; } } }
-        for (const [o, ob] of boxNeighbors(g, ce, cb)) { const kk = o.id + ':' + ob; if (!seen.has(kk)) { seen.add(kk); stack.push([o, ob]); } }
+        const sh = share.get(ce.id * 64 + cb); if (sh) { net.amount += sh.amt; seNum += sh.amt * sh.se; seDen += sh.amt; if (sh.amt > 0.01 && sh.fluid) { if (!anyFluid || sh.amt > bestAmt) { anyFluid = sh.fluid; bestAmt = sh.amt; } } }
+        // Complete every neighbor scan before marking nodes seen, matching callback timing and live entity refs.
+        neighbors(ce, cb, neighborEntities, neighborBoxes);
+        for (let i = 0; i < neighborEntities.length; i++) {
+          const o = neighborEntities[i], ob = neighborBoxes[i], kk = o.id * 64 + ob;
+          if (!seen.has(kk)) { seen.add(kk); stackEntities.push(o); stackBoxes.push(ob); }
+        }
       }
       if (filters.size > 1) net.conflict = true;
       net.fluid = filters.size ? [...filters][0] : anyFluid; net.filtered = filters.size > 0;
-      if (filters.size === 1 && anyFluid && anyFluid !== net.fluid) net.amount = 0; // смена рецепта: старая жидкость сливается
+      net.se = seDen > 1e-9 ? Math.round(seNum / seDen * 1e6) / 1e6 : SE_BOILER;
+      if (filters.size === 1 && anyFluid && anyFluid !== net.fluid) { net.amount = 0; net.se = SE_BOILER; } // смена рецепта: старая жидкость сливается
       net.amount = Math.round(Math.min(net.amount, net.cap) * 1e6) / 1e6; // сетка 1e-6: пересборка идемпотентна (сохранение → загрузка без дрейфа)
       nets.push(net);
     }
@@ -195,4 +342,5 @@ export function fluidSnapshot(g: Game, e: Entity) {
   const p = PROTOS[e.proto]; if (!p.fluid || !e._fn) return;
   e.famt = p.fluid.map((box, b) => { const n = g.fluidNets[e._fn![b]]; return n && n.cap ? n.amount * box.cap / n.cap : 0; });
   e.ffluid = p.fluid.map((_, b) => g.fluidNets[e._fn![b]]?.fluid ?? null);
+  e.fse = p.fluid.map((_, b) => g.fluidNets[e._fn![b]]?.se ?? SE_BOILER);
 }

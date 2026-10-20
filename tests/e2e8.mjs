@@ -1,12 +1,12 @@
 // E2E M10 (часть 2): локализация EN, режим для дальтоников, масштаб интерфейса 200%.
-import { chromium } from 'playwright';
-const b = await chromium.launch({ executablePath: '/usr/local/bin/chromium', args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--use-gl=angle'] });
+import { launchBrowser, selectedBrowser, appUrl, projectRoot } from './browser.mjs';
+const b = await launchBrowser(selectedBrowser(), { args: ['--enable-unsafe-swiftshader', '--use-gl=angle'] });
 const errs = []; let fails = 0; const left = new Map();
 const ok = (c, m) => { console.log((c ? '  ✔ ' : '  ✘ ') + m); if (!c) fails++; };
 const ctx = await b.newContext({ viewport: { width: 1600, height: 900 }, locale: 'en-US' });
 const p = await ctx.newPage();
 p.on('pageerror', e => errs.push('PAGEERROR ' + e.message)); p.on('console', m => { if (m.type() === 'error') errs.push('CONSOLE ' + m.text()); });
-await p.goto('file:///data/game/dist/index.html?local=1');
+await p.goto(appUrl(import.meta.url, '?local=1'));
 await p.waitForFunction(() => window.__texMs != null && window.__zavod, null, { timeout: 180000 }); await p.waitForTimeout(400);
 ok(await p.evaluate(() => window.__zavod.settings.lang) === 'en', 'язык по умолчанию для en-US — English');
 const scan = async (tag) => { const t = await p.evaluate(() => [...document.querySelectorAll('.hud, #win, #tip')].map(e => e.innerText).join('\n') + '\n' + document.title);

@@ -1,0 +1,113 @@
+{
+  "label": "combined",
+  "executablePath": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+  "browser": "137.0.7151.69",
+  "headless": false,
+  "forcedGpuFlags": false,
+  "url": "file:///D:/Project/webfactory/release-v1.16/dist/index.html?bench=L4&render=webgl&gfx=low",
+  "errors": [],
+  "file": {
+    "format": "zavod7-gpubench",
+    "v": 1,
+    "version": "1.16.0-rc.7",
+    "installId": "uv67wxpn",
+    "exported": "2026-10-10T00:30:33.716Z",
+    "system": {
+      "browser": "Chrome 137",
+      "os": "Windows",
+      "lang": "ru-RU",
+      "screen": "1600×900@1",
+      "window": "1600×900",
+      "cores": 16,
+      "memoryGB": 8,
+      "headless": false,
+      "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 Laptop GPU (0x000028A0) Direct3D11 vs_5_0 ps_5_0, D3D11)"
+    },
+    "renderer": "webgl",
+    "rendererNote": "",
+    "preset": "low",
+    "settings": {
+      "resScale": 0.75,
+      "dprMax": 1,
+      "fpsCap": 60,
+      "tex": 512,
+      "smoke": false,
+      "dayNight": true,
+      "renderer": "auto"
+    },
+    "scene": "L4",
+    "level": 4,
+    "levelInfo": {
+      "level": 4,
+      "ents": 18830,
+      "techs": 203,
+      "types": 23,
+      "typesTotal": 40,
+      "trains": 20,
+      "robots": 120,
+      "silos": 4,
+      "cells": 165
+    },
+    "metrics": {
+      "level": 4,
+      "minutes": 0.58,
+      "rockets": 0,
+      "partsPerMin": 150,
+      "rocketsPerMin": 1.5,
+      "robotsFlying": 80
+    },
+    "ents": 18830,
+    "phases": [
+      {
+        "zoom": 1,
+        "sec": 10.07,
+        "frames": 1811,
+        "fps": 179.84,
+        "frameP50": 5.6,
+        "frameP95": 5.7,
+        "frameP99": 5.8,
+        "over20": 0,
+        "cpuP50": 3.1,
+        "cpuP95": 5.1,
+        "ups": 59.98
+      },
+      {
+        "zoom": 0.5,
+        "sec": 10.1,
+        "frames": 1813,
+        "fps": 179.49,
+        "frameP50": 5.6,
+        "frameP95": 5.7,
+        "frameP99": 5.9,
+        "over20": 0,
+        "cpuP50": 3.5,
+        "cpuP95": 5.6,
+        "ups": 59.92
+      },
+      {
+        "zoom": 0.1,
+        "sec": 10.05,
+        "frames": 1808,
+        "fps": 179.91,
+        "frameP50": 5.6,
+        "frameP95": 5.7,
+        "frameP99": 5.8,
+        "over20": 0,
+        "cpuP50": 2.5,
+        "cpuP95": 4.5,
+        "ups": 59.95
+      }
+    ],
+    "result": {
+      "fps": 179.49,
+      "frameP50": 5.6,
+      "frameP95": 5.7,
+      "cpuP95": 5.6,
+      "ups": 59.92
+    },
+    "ok60": true
+  },
+  "error": "Готово",
+  "mode": "webgl",
+  "note": " (ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 Laptop GPU (0x000028A, аппаратный)"
+}

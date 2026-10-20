@@ -73,7 +73,7 @@ export function parsePackage(files0: Record<string, Uint8Array>, label = 'мод
 }
 /** порядок загрузки: зависимости раньше зависящих, иначе — по приоритету пользователя (перетаскивание), затем по имени.
  *  Возвращает включённые моды по порядку; моды с ошибками зависимостей — в failed. */
-export function orderMods(pkgs: ModPackage[], prio: string[] = [], game = '1.10.0'): { order: ModPackage[]; failed: Map<string, ModError[]> } {
+export function orderMods(pkgs: ModPackage[], prio: string[] = [], game = '1.11.0'): { order: ModPackage[]; failed: Map<string, ModError[]> } {
   const failed = new Map<string, ModError[]>(); const fail = (m: string, e: ModError) => { const a = failed.get(m) || []; a.push(e); failed.set(m, a); };
   const by = new Map<string, ModPackage>();
   for (const p of pkgs) {

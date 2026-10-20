@@ -1,0 +1,8 @@
+{
+  "name": "@noble/hashes",
+  "license": "MIT",
+  "source": "https://registry.npmjs.org/@noble/hashes/-/hashes-2.0.1.tgz",
+  "purpose": "Unmodified upstream SHA256 HMAC PBKDF2 source; no lifecycle scripts executed",
+  "integrity": "sha512-XlOlEbQcE9fmuXxrVTXCTlG2nlRXa9Rj3rr5Ue/+tX+nmkgbX720YHh0VR3hBF9xDvwnb8D2shVGOwNx+ulArw==",
+  "version": "2.0.1"
+}

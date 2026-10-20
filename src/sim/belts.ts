@@ -1,9 +1,11 @@
 // Конвейеры (8.1): 2 дорожки, по 4 предмета на клетку, позиции в целых 1/256 клетки.
 import { DX, DY } from '../core/types';
 import { PROTOS } from '../data/entities';
+import { ITEMS } from '../data/items';
 import type { Entity, Game } from './game';
 import { beltPulse } from './circuits';
 import { OPT } from './perf';
+import { beltLanePos } from './beltgeom';
 
 // ---------- v1.9: спящие конвейеры ----------
 // Лента, на которой за тик ничего не сдвинулось (пустая или забитая), засыпает: её updateBelt даст тот же результат,
@@ -36,7 +38,7 @@ export function beltTouched(g: Game, e: Entity) {
 export const LEN = 256, GAP = 64, MID = 128, END_STOP = 224;
 /** n — размер стопки (v1.4, 1..4): стопочный манипулятор кладёт до 4 предметов на одно место ленты.
  *  Стопка едет как один предмет: разделитель и подземный конвейер её не делят, манипулятор забирает целиком. */
-export interface BeltItem { item: string; pos: number; n: number; m?: number; }
+export interface BeltItem { item: string; pos: number; n: number; m?: number; instance?: import('./inventory').DroneStackState; }
 export const BELT_STACK_MAX = 4;
 export interface Target { e: Entity; seg: number; lane: number; mode: 'straight' | 'side'; }
 
@@ -98,15 +100,29 @@ export function updateCurve(g: Game, e: Entity) {
   }
   if (feeders.length === 1) e.curve = feeders[0];
 }
-function laneFree(arr: BeltItem[], pos: number) { for (const it of arr) if (Math.abs(it.pos - pos) < GAP) return false; return true; }
+function findInsertPos(arr: BeltItem[]): number | null {
+  let best = -1, distance = Infinity;
+  const consider = (lo: number, hi: number) => {
+    lo = Math.max(GAP, lo); hi = Math.min(LEN - GAP, hi);
+    if (lo > hi) return;
+    const pos = Math.max(lo, Math.min(MID, hi)), d = Math.abs(pos - MID);
+    if (d < distance || (d === distance && pos < best)) { best = pos; distance = d; }
+  };
+  if (!arr.length) return MID;
+  consider(arr[0].pos + GAP, LEN - GAP);
+  for (let i = 0; i + 1 < arr.length; i++) consider(arr[i + 1].pos + GAP, arr[i].pos - GAP);
+  consider(GAP, arr[arr.length - 1].pos - GAP);
+  return best < 0 ? null : best;
+}
 function insertSorted(arr: BeltItem[], it: BeltItem) {
   let i = 0; while (i < arr.length && arr[i].pos > it.pos) i++; arr.splice(i, 0, it);
 }
 /** Положить предмет на дорожку (манипулятор/бур) в середину клетки */
-export function beltInsert(e: Entity, s: number, lane: number, item: string, n = 1, g?: Game): boolean {
+export function beltInsert(e: Entity, s: number, lane: number, item: string, n = 1, g?: Game, instance?: import('./inventory').DroneStackState): boolean {
+  if (ITEMS[item]?.droneModel ? (!instance || n !== 1) : !!instance) return false;
   const arr = e.lanes![s][lane];
-  if (!laneFree(arr, MID)) return false;
-  insertSorted(arr, { item, pos: MID, n }); if (e.cc) beltPulse(e, item, n);
+  const pos = findInsertPos(arr); if (pos == null) return false;
+  insertSorted(arr, { item, pos, n, ...(instance ? { instance: { ...instance } } : {}) }); if (e.cc) beltPulse(e, item, n);
   if (g) beltTouched(g, e); else e._sl = 0;
   return true;
 }
@@ -125,10 +141,10 @@ function tryTransfer(g: Game, t: Target, it: BeltItem, over: number): boolean {
   if (t.mode === 'straight') {
     const last = arr[arr.length - 1];
     if (last && last.pos - over < GAP) return false;
-    arr.push({ item: it.item, pos: over, n: it.n, m: g.tick }); if (t.e.cc) beltPulse(t.e, it.item, it.n); beltTouched(g, t.e); return true;
+    arr.push({ item: it.item, pos: over, n: it.n, m: g.tick, ...(it.instance ? { instance: { ...it.instance } } : {}) }); if (t.e.cc) beltPulse(t.e, it.item, it.n); beltTouched(g, t.e); return true;
   }
-  if (!laneFree(arr, MID)) return false;
-  insertSorted(arr, { item: it.item, pos: MID, n: it.n }); if (t.e.cc) beltPulse(t.e, it.item, it.n); beltTouched(g, t.e); return true;
+  const pos = findInsertPos(arr); if (pos == null) return false;
+  insertSorted(arr, { item: it.item, pos, n: it.n, m: g.tick, ...(it.instance ? { instance: { ...it.instance } } : {}) }); if (t.e.cc) beltPulse(t.e, it.item, it.n); beltTouched(g, t.e); return true;
 }
 /**
  * Обновить конвейер и всё, что ниже по течению, начиная с самого дальнего (1.0: раньше порядок был порядком постройки,
@@ -230,8 +246,35 @@ export function updateBelt(g: Game, e: Entity) {
 
 /** позиция предмета на конвейере (центр, в клетках мира): сегмент s, полоса L, позиция 0..255 */
 export function beltItemPos(e: Entity, s: number, L: number, pos: number): [number, number] {
-  const [tx, ty] = segTile(e, s); const a = pos / 256; const lat = L === 0 ? -0.24 : 0.24;
-  const d = e.dir, r = (d + 1) % 4;
-  if (e.curve != null && e.curve >= 0 && a < 0.5) { const c = e.curve, rc = (c + 1) % 4; const k = (0.5 - a); return [tx + .5 - DX[c] * k + DX[rc] * lat, ty + .5 - DY[c] * k + DY[rc] * lat]; }
-  return [tx + .5 + DX[d] * (a - .5) + DX[r] * lat, ty + .5 + DY[d] * (a - .5) + DY[r] * lat];
+  const [tx, ty] = segTile(e, s);
+  return beltLanePos(tx, ty, e.dir, e.curve ?? -1, L, pos);
+}
+
+/** v1.16: подбор с обычного конвейера (действие «Подобрать»): предметы обеих дорожек в радиусе r от инженера, в устойчивом порядке
+ *  «расстояние → id конвейера → дорожка → позиция»; забирается только то, что помещается в инвентарь, остаток остаётся на ленте */
+export function beltPickup(g: Game, px: number, py: number, r: number): number {
+  const c: { d: number; id: number; lane: number; pos: number; e: Entity; it: BeltItem }[] = [];
+  for (let ty = Math.floor(py - r) - 1; ty <= Math.floor(py + r) + 1; ty++) for (let tx = Math.floor(px - r) - 1; tx <= Math.floor(px + r) + 1; tx++) {
+    const e = g.entAt(tx, ty); if (!e || e.t !== 'belt' || e.x !== tx || e.y !== ty || !e.lanes) continue;
+    const dx = DX[e.dir], dy = DY[e.dir], ox = -dy, oy = dx;
+    for (let L = 0; L < 2; L++) for (const it of e.lanes[0][L]) {
+      const t = it.pos / LEN - 0.5, o = L === 0 ? -0.25 : 0.25;
+      const ix = e.x + 0.5 + dx * t + ox * o, iy = e.y + 0.5 + dy * t + oy * o, d = Math.hypot(ix - px, iy - py);
+      if (d < r) c.push({ d, id: e.id, lane: L, pos: it.pos, e, it });
+    }
+  }
+  c.sort((a, b) => a.d - b.d || a.id - b.id || a.lane - b.lane || a.pos - b.pos);
+  let got = 0; const touched = new Set<Entity>();
+  for (const q of c) {
+    const n = q.it.n || 1;
+    if (q.it.instance) {
+      if (n !== 1 || !g.inv.addStack({ item: q.it.item, count: 1, instance: { ...q.it.instance } })) continue;
+      got++; touched.add(q.e); const lane = q.e.lanes![0][q.lane], i = lane.indexOf(q.it); if (i >= 0) lane.splice(i, 1); continue;
+    }
+    const left = g.inv.add(q.it.item, n); if (left === n) continue;
+    got += n - left; touched.add(q.e);
+    if (left) q.it.n = left; else { const l = q.e.lanes![0][q.lane]; const i = l.indexOf(q.it); if (i >= 0) l.splice(i, 1); }
+  }
+  for (const e of touched) beltTouched(g, e);
+  return got;
 }

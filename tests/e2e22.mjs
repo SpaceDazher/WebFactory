@@ -1,27 +1,27 @@
 // E2E v1.7 «Железная дорога I»: протягивание пути мышью (предпросмотр, разрыв закрыт), окно станции (переименование),
 // вагоны на рельсы мышью (призрак, R — задом), окно локомотива (состав, расписание кнопками, авто), поезд проходит круг,
 // окно «Поезда» (Y), кабина (V, газ), WebGL2 и Canvas2D; EN без кириллицы.
-// Запуск: node tests/e2e22.mjs [chromium|firefox|webkit] (без аргумента — все три; WebKit — из /data/pwold).
+// Запуск: node tests/e2e22.mjs [chromium|firefox|webkit] (без аргумента — все три; WebKit — из кеша Playwright).
+import { launchBrowser, selectedBrowser, appUrl, projectRoot } from './browser.mjs';
+import { startGameplay } from './gameplay-start.mjs';
 import fs from 'fs';
 import { spawnSync } from 'child_process';
-const WK = { PW: '/data/pwold/node_modules/playwright/index.mjs', PLAYWRIGHT_BROWSERS_PATH: '/data/pwold/browsers', PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS: '1', PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: 'ubuntu20.04-x64' };
-const name = process.argv[2];
+const name = process.env.PW_BROWSER || process.argv[2];
 if (!name) {
   let bad = 0; const sum = [];
   for (const n of ['chromium', 'firefox', 'webkit']) {
-    if (n === 'webkit' && !fs.existsSync(WK.PW)) { console.log('\n=== webkit: пропущен (нет /data/pwold)'); continue; }
-    const r = spawnSync(process.execPath, [process.argv[1], n], { stdio: 'inherit', env: { ...process.env, ...(n === 'webkit' ? WK : {}) } });
+    const r = spawnSync(process.execPath, [process.argv[1], n], { stdio: 'inherit', env: process.env });
     sum.push(`${n}: ${r.status === 0 ? 'OK' : 'ПРОВАЛ'}`); if (r.status !== 0) bad++;
   }
   console.log('\n' + sum.join(' · ')); process.exit(bad ? 1 : 0);
 }
-const pw = (await import(process.env.PW || 'playwright')).default;
 let fails = 0; const errs = [];
 const ok = (c, m) => { console.log((c ? '  ✔ ' : '  ✘ ') + m); if (!c) fails++; };
-const URL0 = 'file:///data/game/dist/index.html';
-const VER = JSON.parse(fs.readFileSync('/data/game/package.json', 'utf8')).version;
-fs.mkdirSync('/data/game/shots', { recursive: true });
-const b = await pw[name].launch(name === 'chromium' ? { executablePath: '/usr/local/bin/chromium', args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--use-gl=angle'] } : {});
+const URL0 = appUrl(import.meta.url);
+const ROOT = projectRoot(import.meta.url);
+const VER = JSON.parse(fs.readFileSync(ROOT + '/package.json', 'utf8')).version;
+fs.mkdirSync(ROOT + '/shots', { recursive: true });
+const b = await launchBrowser(name, name === 'chromium' ? { args: ['--enable-unsafe-swiftshader', '--use-gl=angle'] } : {});
 console.log(`\n=== ${name} ${b.version()} (игра ${VER})`);
 const watch = p => { p.on('pageerror', e => errs.push('PAGEERROR ' + e.message)); p.on('console', m => { if (m.type() === 'error') errs.push('CONSOLE ' + m.text().slice(0, 300)); }); };
 const ready = async p => { await p.waitForFunction(() => window.__texMs != null && window.__zavod && (!window.__zavod.sim || window.__zavod.sim.snaps > 2), null, { timeout: 300000 }); await p.waitForTimeout(300); };
@@ -59,6 +59,7 @@ for (const mode of ['webgl', 'canvas']) {
   await ctx.addInitScript(() => localStorage.setItem('zavod7:seenVersion', '9.9.9'));
   const p = await ctx.newPage(); watch(p);
   await p.goto(URL0 + `?render=${mode}&gfx=low`); await ready(p);
+  await startGameplay(p);
   const rmode = await p.evaluate(() => window.__zavod.R.mode);
   await p.evaluate(() => window.__zavod.ui.close());
   const sc = await W(p, SCENE);
@@ -105,7 +106,7 @@ for (const mode of ['webgl', 'canvas']) {
   await p.evaluate(() => { const v = window.__zavod.view; v.cursor = null; v.rot = 0; });
   const tr = await W(p, `return g.trains.map(t => ({ id: t.id, n: t.cars.length, back: t.cars.map(id => !!g.ents.get(id).fl) }));`);
   ok(tr.length === 1 && tr[0].n === 3 && tr[0].back.filter(Boolean).length === 1, `один поезд из 3 вагонов, один локомотив задом: ${JSON.stringify(tr)}`);
-  await W(p, `for (const e of g.ents.values()) if (e.t === 'loco') e.fuel = { item: 'coal', count: 20 }; return 1;`);
+  await W(p, `for (const e of g.ents.values()) if (e.t === 'loco' && e.fl) e.fuel = { item: 'coal', count: 20 }; return 1;`);
 
   console.log('4. Окно локомотива: состав, расписание кнопками, автоматический режим');
   const loco = await W(p, `return g.trains[0].cars.find(id => g.ents.get(id).t === 'loco' && !g.ents.get(id).fl);`);
@@ -113,6 +114,32 @@ for (const mode of ['webgl', 'canvas']) {
   await click(lp[0], lp[1]); await p.waitForTimeout(500);
   t = await p.evaluate(() => document.getElementById('win').innerText);
   ok(/Поезд №/.test(t) && await p.evaluate(() => document.querySelectorAll('[data-act="tcar"]').length === 3), 'щелчок по локомотиву — окно поезда, 3 вагона в составе');
+  const inventoryCoal = await W(p, `return {index:g.inv.slots.findIndex(s=>s?.item==='coal'),count:g.inv.count('coal')};`);
+  const coalSelector = `[data-act="inv"][data-mode="put"][data-i="${inventoryCoal.index}"]`;
+  const inventoryVisible = await p.locator(coalSelector).count() === 1;
+  ok(inventoryVisible, 'инвентарь доступен в окне локомотива для заправки');
+  if (!inventoryVisible) { await b.close(); throw new Error('Locomotive window has no refuelling inventory'); }
+  const fuelSelector = '[data-act="take"][data-slot="fuel"]';
+  const emptyFuelClickable = await p.locator(fuelSelector).count() === 1;
+  ok(emptyFuelClickable, 'пустой топливный слот принимает щелчок');
+  if (!emptyFuelClickable) { await b.close(); throw new Error('Empty locomotive fuel slot is not interactive'); }
+  const coalBefore = inventoryCoal.count;
+  await p.locator(coalSelector).click({button:'right'});
+  ok(coalBefore > 0 && await until(p, () => window.__zavod.game.held?.item === 'coal'), 'ПКМ берёт уголь в руку из видимого инвентаря');
+  await p.locator(fuelSelector).click();
+  ok(await until(p, id => window.__zavod.game.ents.get(id)?.fuel?.count > 0 && !window.__zavod.game.held, loco), 'настоящий щелчок по пустому слоту заправил локомотив');
+  const manualFuel = await W(p, `return {fuel:g.ents.get(${loco}).fuel,inventory:g.inv.count('coal'),held:g.held};`);
+  ok(manualFuel.fuel?.item === 'coal' && manualFuel.fuel.count === Math.ceil(coalBefore / 2) && manualFuel.inventory + manualFuel.fuel.count === coalBefore && manualFuel.held === null, 'ручная заправка сохраняет баланс угля');
+  await p.locator(coalSelector).click();
+  ok(await until(p, ({id,count}) => window.__zavod.game.ents.get(id)?.fuel?.count === count, {id:loco,count:coalBefore}), 'ЛКМ по оставшемуся углю в инвентаре загружает его в локомотив');
+  await W(p, `g.inv.add('iron-plate',1); const i=g.inv.slots.findIndex(s=>s?.item==='iron-plate'); g.enqueue({t:'hand',op:'pick',from:'inv',i,n:'one'}); return 1;`);
+  await until(p, () => window.__zavod.game.held?.item === 'iron-plate');
+  await p.locator(fuelSelector).click();
+  await p.waitForTimeout(300);
+  const rejectedFuel = await W(p, `return {fuel:g.ents.get(${loco}).fuel,held:g.held};`);
+  ok(rejectedFuel.fuel?.count === coalBefore && rejectedFuel.held?.item === 'iron-plate' && rejectedFuel.held.count === 1, 'неподходящий предмет не исчезает и не заменяет топливо');
+  await W(p, `g.enqueue({t:'hand',op:'return'}); return 1;`);
+  await until(p, () => !window.__zavod.game.held);
   await down(p, '[data-act="sadd"]'); await p.waitForTimeout(300); await down(p, '[data-act="sadd"]'); await p.waitForTimeout(300);
   for (const [i, k] of [[0, 2], [1, 1]]) for (let j = 0; j < k; j++) { await down(p, `[data-act="scond"][data-i="${i * 16}"]`); await p.waitForTimeout(250); }
   for (let j = 0; j < 4; j++) { await down(p, '[data-act="sn"][data-i="0"][data-d="-5"]'); await p.waitForTimeout(150); }

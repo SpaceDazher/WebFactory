@@ -2,6 +2,7 @@
 // скорость конвейеров всех уровней, манипуляторы (что берут и куда кладут), слияние и разделение электро- и
 // жидкостных сетей, время рецептов в машинах, расход пакетов на исследование.
 import { Game } from '../src/sim/game';
+import { beltInsert, updateBelt } from '../src/sim/belts';
 import { RECIPES } from '../src/data/recipes';
 import { TECHS } from '../src/data/techs';
 let fails = 0;
@@ -67,6 +68,131 @@ for (const [proto, cells, perSec] of [['transport-belt', 1.875, 15], ['fast-tran
     const [r1, r2] = meas(g, inb[0], [o1[4], o2[4]]);
     ok(Math.abs(r1 - 7.5) < 0.6 && Math.abs(r2 - 7.5) < 0.6, `разделитель: ${r1.toFixed(1)} + ${r2.toFixed(1)} предм/с (цель 7,5 + 7,5)`);
   }
+}
+
+console.log('1b. Belt insertion uses available gaps and preserves spacing');
+{
+  const g = fresh(false), A = land(g, 40, 40, 3, 3);
+  const b = g.build('transport-belt', A.x, A.y, 1, false)!;
+  const lane = b.lanes![0][0];
+  lane.push({ item: 'iron-plate', pos: 205, n: 1 }, { item: 'copper-plate', pos: 70, n: 1 });
+  const accepted = beltInsert(b, 0, 0, 'stone', 1, g);
+  const inserted = lane.find(it => it.item === 'stone');
+  ok(accepted && !!inserted && inserted.pos >= 134 && inserted.pos <= 141 &&
+    lane.every((it, i) => i === 0 || lane[i - 1].pos - it.pos >= 64),
+  'valid 70..205 gap accepts near position ' + (inserted?.pos ?? 'no slot') + ' with 64-unit spacing');
+  ok(lane.reduce((n, it) => n + it.n, 0) === 3, 'gap insertion adds one item without losing either existing item');
+  const sideGame = fresh(false), B = land(sideGame, 50, 50, 5, 4);
+  const main = [0, 1, 2].map(i => sideGame.build('transport-belt', B.x + i, B.y + 2, 1, false)!);
+  const side = sideGame.build('transport-belt', B.x + 2, B.y + 1, 2, false)!;
+  const sideTarget = main[2].lanes![0][0];
+  sideTarget.push({ item: 'iron-plate', pos: 205, n: 1 }, { item: 'copper-plate', pos: 70, n: 1 });
+  side.lanes![0][0].push({ item: 'stone', pos: 248, n: 1 });
+  updateBelt(sideGame, side);
+  ok(!side.lanes![0][0].length && sideTarget.length === 3 &&
+    sideTarget.every((it, i) => i === 0 || sideTarget[i - 1].pos - it.pos >= 64),
+  'side feed also uses the valid off-center slot without losing its source item');
+  const sideLoadOrder = (sourceFirst: boolean) => {
+    const sg = fresh(false), C = land(sg, 80, 80, 5, 4);
+    const buildSide = () => sg.build('transport-belt', C.x + 2, C.y + 1, 2, false)!;
+    const buildMain = () => {
+      sg.build('transport-belt', C.x + 1, C.y + 2, 1, false)!;
+      return sg.build('transport-belt', C.x + 2, C.y + 2, 1, false)!;
+    };
+    const sideBelt = sourceFirst ? buildSide() : null, mainBelt = buildMain(), sourceBelt = sideBelt || buildSide();
+    sourceBelt.lanes![0][0].push({ item: 'stone', pos: 248, n: 1 });
+    sg.step();
+    return { pos: mainBelt.lanes![0][0][0]?.pos, sourceCount: sourceBelt.lanes![0][0].length };
+  };
+  const sideFirst = sideLoadOrder(true), targetFirst = sideLoadOrder(false);
+  ok(sideFirst.pos === 128 && targetFirst.pos === 128 && sideFirst.sourceCount === 0 && targetFirst.sourceCount === 0,
+    'side transfers keep their same-tick position regardless of belt build order');
+  lane.length = 0;
+  lane.push({ item: 'coal', pos: 192, n: 1 }, { item: 'coal', pos: 128, n: 1 }, { item: 'coal', pos: 64, n: 1 });
+  const before = lane.map(it => it.pos).join(',');
+  ok(!beltInsert(b, 0, 0, 'stone', 1, g) && lane.map(it => it.pos).join(',') === before,
+    'a lane with no 64-unit slot keeps backpressure and its contents');
+}
+
+console.log('1c. 48 furnaces feed the central yellow and red belts');
+{
+  const g = fresh(), A = land(g, 30, 30, 9, 68), bx = A.x + 4;
+  const belts: any[] = [], furnaces: any[] = [], inserters: any[] = [];
+  for (let y = 0; y < 64; y++) belts.push(g.build('transport-belt', bx, A.y + y, 2, false)!);
+  for (let i = 0; i < 24; i++) {
+    const y = A.y + 2 + i * 2;
+    const left = g.build('stone-furnace', bx - 3, y, 0, false)!;
+    const li = g.build('inserter', bx - 1, y, 1, false)!;
+    const right = g.build('stone-furnace', bx + 2, y, 0, false)!;
+    const ri = g.build('inserter', bx + 1, y, 3, false)!;
+    for (const f of [left, right]) { f.input = { 'iron-ore': 1000 }; f.fuel = { item: 'coal', count: 1000 }; furnaces.push(f); }
+    inserters.push(li, ri);
+  }
+  const drain = () => {
+    let n = 0;
+    for (const lane of belts[belts.length - 1].lanes![0]) while (lane.length && lane[0].pos >= 192) { n += lane.shift()!.n; }
+    return n;
+  };
+  let yellowItems = 0, yellowMaxWaiting = 0, totalDelivered = 0;
+  const yellowFullRun = new Array(inserters.length).fill(0), yellowMaxFullRun = new Array(inserters.length).fill(0);
+  const yellowUnloadCount = new Array(inserters.length).fill(0), prevHand = inserters.map(e => e.hand);
+  const outputCount = (f: any) => f.output?.['iron-plate'] || 0;
+  const producerBuffer = () => furnaces.reduce((n, f) => n + outputCount(f), 0) + inserters.reduce((n, e) => n + (e.hand === 'iron-plate' ? e.hn || 1 : 0), 0);
+  let yellowStartBuffer = 0, yellowMaxBuffer = 0;
+  for (let i = 0; i < 75 * 60; i++) {
+    if (i === 45 * 60) yellowStartBuffer = producerBuffer();
+    g.step();
+    const delivered = drain();
+    totalDelivered += delivered;
+    if (i >= 45 * 60) yellowItems += delivered;
+    const waiting = inserters.reduce((n, e) => n + (e.status === 'output-full' ? 1 : 0), 0);
+    for (let j = 0; j < inserters.length; j++) {
+      if (inserters[j].status === 'output-full') yellowFullRun[j]++;
+      else yellowFullRun[j] = 0;
+      if (i >= 45 * 60) yellowMaxFullRun[j] = Math.max(yellowMaxFullRun[j], yellowFullRun[j]);
+      const hadOutput = prevHand[j] === 'iron-plate', hasOutput = inserters[j].hand === 'iron-plate';
+      if (i >= 45 * 60 && hadOutput && !hasOutput) yellowUnloadCount[j]++;
+      prevHand[j] = inserters[j].hand;
+    }
+    if (i >= 45 * 60) {
+      yellowMaxWaiting = Math.max(yellowMaxWaiting, waiting);
+      yellowMaxBuffer = Math.max(yellowMaxBuffer, producerBuffer());
+    }
+  }
+  const yellowRate = yellowItems / 30;
+  const maxOutputFullStreak = Math.max(...yellowMaxFullRun);
+  const maxProducerBufferGrowth = yellowMaxBuffer - yellowStartBuffer;
+  const endProducerBufferGrowth = producerBuffer() - yellowStartBuffer;
+  const nonUnloadingInserters = yellowUnloadCount.flatMap((n, i) => n ? [] : [i]);
+  console.log('  steady-window diagnostics: max output-full streak ' + maxOutputFullStreak + ' ticks, max producer-buffer growth ' + maxProducerBufferGrowth + ', end growth ' + endProducerBufferGrowth + ', inserters without unload ' + JSON.stringify(nonUnloadingInserters));
+  for (const b of belts) g.fastReplace(b, 'fast-transport-belt', b.dir, false);
+  let redItems = 0;
+  for (let i = 0; i < 60 * 60; i++) {
+    g.step();
+    const delivered = drain();
+    totalDelivered += delivered;
+    if (i >= 30 * 60) redItems += delivered;
+  }
+  const redRate = redItems / 30;
+  ok(yellowRate >= 14 && yellowRate <= 15.1,
+    'yellow steady flow ' + yellowRate.toFixed(2) + '/s (' + (yellowRate * 60).toFixed(0) + '/min), output-full max ' + yellowMaxWaiting + '/48');
+  ok(maxOutputFullStreak <= 120 && nonUnloadingInserters.length === 0,
+    'all 48 inserters unload during the steady window; longest output-full wait ' + maxOutputFullStreak + ' ticks, missing ' + JSON.stringify(nonUnloadingInserters));
+  ok(maxProducerBufferGrowth <= 48,
+    'producer and inserter buffers stay bounded to one synchronized production burst: peak growth ' + maxProducerBufferGrowth + ' items');
+  ok(yellowMaxWaiting <= 32,
+    'yellow inserters keep draining despite synchronized bursts: output-full max ' + yellowMaxWaiting + '/48 (pre-fix reproduction 42/48)');
+  ok(redRate >= 14 && redRate <= 15.1,
+    'red steady flow ' + redRate.toFixed(2) + '/s (' + (redRate * 60).toFixed(0) + '/min), same 48-furnace source');
+  ok(furnaces.length === 48 && inserters.length === 48 && belts[0].dir === 2 &&
+    belts.every(b => b.proto === 'fast-transport-belt'),
+  '48 two-sided furnaces and opposing inserters use the upgraded central belt');
+  const beltItems = belts.reduce((n, b) => n + b.lanes!.flat(2).reduce((sum, it) => sum + it.n, 0), 0);
+  const outputItems = furnaces.reduce((n, f) => n + (f.output!['iron-plate'] || 0), 0);
+  const heldItems = inserters.reduce((n, e) => n + (e.hand === 'iron-plate' ? e.hn || 1 : 0), 0);
+  const accounted = totalDelivered + beltItems + outputItems + heldItems;
+  ok(accounted === (g.stats.produced['iron-plate'] || 0),
+    '48-furnace run accounts for every produced plate: ' + accounted + '/' + (g.stats.produced['iron-plate'] || 0));
 }
 
 console.log('2. Манипуляторы: что берут и куда кладут (7.4)');

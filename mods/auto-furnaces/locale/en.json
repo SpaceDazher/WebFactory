@@ -1,0 +1,16 @@
+{
+ "Авто-стройка печей вокруг руды": "Auto-build furnaces around ore",
+ "Пример скриптового мода (control.js): поставьте бур на железную или медную руду — перед ним сама появится печь из вашего инвентаря. Окно мода: счётчик, выбор печи, включение и выключение.": "Example script mod (control.js): place a drill on iron or copper ore and a furnace from your inventory appears in front of it. Mod window: counter, furnace choice, on/off.",
+ "Авто-печи": "Auto furnaces",
+ "Включено: печь встанет перед новым буром на руде": "On: a furnace is placed in front of every new drill on ore",
+ "Выключено": "Off",
+ "Поставлено печей": "Furnaces placed",
+ "Печь (щёлкните, чтобы выбрать)": "Furnace (click to choose)",
+ "Каменная печь": "Stone furnace",
+ "Стальная печь": "Steel furnace",
+ "Выключить": "Turn off",
+ "Включить": "Turn on",
+ "Скрыть": "Hide",
+ "Первая печь поставлена автоматически": "The first furnace was placed automatically",
+ "Окно «Авто-печи» скрыто. Вернуть: поставьте деревянный сундук": "The “Auto furnaces” window is hidden. To bring it back, place a wooden chest"
+}

@@ -1,0 +1,82 @@
+{
+  "ready": true,
+  "running": false,
+  "text": "Готово",
+  "file": {
+    "format": "zavod7-gpubench",
+    "v": 1,
+    "version": "1.16.0-rc.7",
+    "installId": "boa6e8dr",
+    "exported": "2026-10-09T18:59:13.592Z",
+    "system": {
+      "browser": "Chrome 137",
+      "os": "Windows",
+      "lang": "ru-RU",
+      "screen": "1920×1080@1",
+      "window": "1600×900",
+      "cores": 16,
+      "memoryGB": 8,
+      "headless": false,
+      "gpu": "ANGLE (Intel, Intel(R) UHD Graphics (0x000046A3) Direct3D11 vs_5_0 ps_5_0, D3D11)"
+    },
+    "renderer": "webgl",
+    "rendererNote": "",
+    "preset": "low",
+    "settings": {
+      "resScale": 0.75,
+      "dprMax": 1,
+      "fpsCap": 60,
+      "tex": 512,
+      "smoke": false,
+      "dayNight": true,
+      "renderer": "auto"
+    },
+    "scene": "L2",
+    "level": 2,
+    "levelInfo": null,
+    "metrics": null,
+    "ents": 1906,
+    "phases": [
+      {
+        "zoom": 1,
+        "sec": 10.11,
+        "frames": 9,
+        "fps": 0.89,
+        "frameP50": 1000.3,
+        "frameP95": 1005.5,
+        "frameP99": 1005.5,
+        "over20": 1,
+        "cpuP50": 11.6,
+        "cpuP95": 80.2,
+        "ups": 59.97
+      },
+      {
+        "zoom": 0.5,
+        "sec": 10.12,
+        "frames": 9,
+        "fps": 0.89,
+        "frameP50": 1002.3,
+        "frameP95": 1014.1,
+        "frameP99": 1014.1,
+        "over20": 1,
+        "cpuP50": 12.3,
+        "cpuP95": 29.9,
+        "ups": 59.99
+      }
+    ],
+    "result": {
+      "fps": 0.89,
+      "frameP50": 1002.3,
+      "frameP95": 1014.1,
+      "cpuP95": 80.2,
+      "ups": 59.97
+    },
+    "ok60": false
+  },
+  "viewport": [
+    1600,
+    900,
+    1
+  ],
+  "visibility": "visible"
+}

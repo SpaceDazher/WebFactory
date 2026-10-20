@@ -8,13 +8,14 @@ import { shapeOf, U, UX, UY, pointOn, isRailProto, RailShape, SHAPES, rot8 } fro
 import { tkey } from '../core/types';
 import { ITEMS } from '../data/items';
 import { Inventory } from './inventory';
+import { LOCO_FUEL_SLOTS } from './trainfuel';
 import { hurtPl, hitUnit } from './enemies';
 import { condOk, sigValue } from './circuits';
 import type { Cond as CCond, CondOp } from './circuits';
 
-export const CAR_LEN: Record<string, number> = { locomotive: 7000, 'cargo-wagon': 6000, 'fluid-wagon': 6000 };
+export const CAR_LEN: Record<string, number> = { locomotive: 7000, 'cargo-wagon': 6000, 'fluid-wagon': 6000, 'artillery-wagon': 6000 };
 export const CAR_GAP = 500;
-export const CAR_MASS: Record<string, number> = { locomotive: 2000, 'cargo-wagon': 1000, 'fluid-wagon': 1000 };
+export const CAR_MASS: Record<string, number> = { locomotive: 2000, 'cargo-wagon': 1000, 'fluid-wagon': 1000, 'artillery-wagon': 2000 };
 /** v1.8: вместимость вагона-цистерны */
 export const FWAGON_CAP = 25000;
 /** 72 клетки/с = 1,2 клетки/тик в 1/1000 единицы */
@@ -147,12 +148,16 @@ export function railAt(g: Game, x: number, y: number, px = x + .5, py = y + .5):
 }
 export function segDist(px: number, py: number, ax: number, ay: number, bx: number, by: number) { const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy; let t = L ? ((px - ax) * dx + (py - ay) * dy) / L : 0; t = t < 0 ? 0 : t > 1 ? 1 : t; return Math.hypot(ax + dx * t - px, ay + dy * t - py); }
 // ---------- станции ----------
-/** узел остановки станции: [x, y, направление движения (0..7)]. Станция стоит справа от пути, рядом с головой поезда */
-export function stopNode(e: { x: number; y: number; dir: number }): [number, number, number] {
+/** Узел станции у пути. Старые станции без stopLeft остаются справа, как в v1.16 RC7. */
+export function stopNode(e: { x: number; y: number; dir: number; stopLeft?: boolean }): [number, number, number] {
+  if (e.stopLeft === true) {
+    switch (e.dir) { case 0: return [e.x + 3, e.y, 0]; case 1: return [e.x + 2, e.y + 3, 2]; case 2: return [e.x - 1, e.y + 2, 4]; default: return [e.x, e.y - 1, 6]; }
+  }
   switch (e.dir) { case 0: return [e.x - 1, e.y, 0]; case 1: return [e.x + 2, e.y - 1, 2]; case 2: return [e.x + 3, e.y + 2, 4]; default: return [e.x, e.y + 3, 6]; }
 }
 /** рамка станции по узлу и направлению (0..3) */
-export function stopBox(x: number, y: number, dir: number): [number, number] {
+export function stopBox(x: number, y: number, dir: number, left = false): [number, number] {
+  if (left) { switch (dir) { case 0: return [x - 3, y]; case 1: return [x - 2, y - 3]; case 2: return [x + 1, y - 2]; default: return [x, y + 1]; } }
   switch (dir) { case 0: return [x + 1, y]; case 1: return [x - 2, y + 1]; case 2: return [x - 3, y - 2]; default: return [x, y - 3]; }
 }
 /** путь у станции есть: ребро приходит в её узел с её направлением */
@@ -186,14 +191,37 @@ export function syncCars(g: Game, t: Train) {
   const P = carPoses(g, t);
   for (const [id, x, y, dx, dy] of P) { const e = carE(g, id); e._cx = x; e._cy = y; e._dx = dx; e._dy = dy; const nx = Math.floor(x - 1), ny = Math.floor(y - 1); if (e.x !== nx || e.y !== ny) { e.x = nx; e.y = ny; } }
 }
+/** общий обход физических клеток вагонов для станционной и nofuel-индексации */
+function eachCarCell(g: Game, t: Train, visit: (e: Entity, k: number, k2: number) => void, include?: (e: Entity) => boolean) {
+  const G = graph(g); let s = 0;
+  for (const id of t.cars) { const e = carE(g, id), L = CAR_LEN[e.proto];
+    if (!include || include(e)) for (let d = 250; d < L; d += 500) { const p = trailPoint(G, t, s + d), q = trailPoint(G, t, s + d + 100); let nx = q[1] - p[1], ny = p[0] - q[0]; const l = Math.sqrt(nx * nx + ny * ny) || 1; nx = nx / l * .5; ny = ny / l * .5;
+      const k = tkey(Math.floor(p[0] + nx), Math.floor(p[1] + ny)), k2 = tkey(Math.floor(p[0] - nx), Math.floor(p[1] - ny)); visit(e, k, k2); }
+    s += L + CAR_GAP; }
+}
 /** клетки стоящих вагонов → id вагона (манипуляторы грузят и разгружают) */
 function setCells(g: Game, t: Train, on: boolean) {
-  const G = graph(g); let s = 0;
-  for (const id of t.cars) { const L = CAR_LEN[carE(g, id).proto];
-    for (let d = 250; d < L; d += 500) { const p = trailPoint(G, t, s + d), q = trailPoint(G, t, s + d + 100); let nx = q[1] - p[1], ny = p[0] - q[0]; const l = Math.sqrt(nx * nx + ny * ny) || 1; nx = nx / l * .5; ny = ny / l * .5;
-      const k = tkey(Math.floor(p[0] + nx), Math.floor(p[1] + ny)), k2 = tkey(Math.floor(p[0] - nx), Math.floor(p[1] - ny));
-      for (const kk of [k, k2]) { if (on) g.carCells.set(kk, id); else if (g.carCells.get(kk) === id) g.carCells.delete(kk); } }
-    s += L + CAR_GAP; }
+  eachCarCell(g, t, (e, k, k2) => {
+    for (const kk of [k, k2]) { if (on) g.carCells.set(kk, e.id); else if (g.carCells.get(kk) === e.id) g.carCells.delete(kk); }
+  });
+}
+/** клетки локомотивов, которые остановились с пустым баком вне станции */
+const noFuelCells = new WeakMap<Train, Map<number, number[]>>();
+function setNoFuelCells(g: Game, t: Train, on: boolean) {
+  const old = noFuelCells.get(t);
+  if (!on) {
+    if (old) for (const [id, keys] of old) for (const k of keys) if (g.carCells.get(k) === id) g.carCells.delete(k);
+    noFuelCells.delete(t); return;
+  }
+  if (old) return;
+  const keysByCar = new Map<number, Set<number>>();
+  eachCarCell(g, t, (e, k, k2) => {
+    let keys = keysByCar.get(e.id); if (!keys) keysByCar.set(e.id, keys = new Set());
+    keys.add(k); keys.add(k2);
+  }, e => e.t === 'loco');
+  const indexed = new Map<number, number[]>();
+  for (const [id, keys] of keysByCar) { const cells = [...keys]; for (const k of cells) g.carCells.set(k, id); indexed.set(id, cells); }
+  if (indexed.size) noFuelCells.set(t, indexed);
 }
 export const carAt = (g: Game, x: number, y: number): Entity | null => { if (!g.carCells.size) return null; const id = g.carCells.get(tkey(x, y)); return id != null ? g.ents.get(id) || null : null; };
 /** вагон под точкой (добыча, окна): ближе 1,1 клетки к оси вагона */
@@ -236,8 +264,9 @@ export function placeCar(g: Game, proto: string, rid: number, px: number, py: nu
 }
 function newCar(g: Game, proto: string, back: boolean): Entity {
   const e: Entity = { id: g.nextId++, proto, t: proto === 'locomotive' ? 'loco' : 'wagon', x: 0, y: 0, w: 2, h: 2, dir: 0, status: 'idle', active: false, hp: 1000 } as Entity;
-  if (proto === 'locomotive') { e.fuel = null; e.fuelJ = 0; e.fl = back || undefined; }
+  if (proto === 'locomotive') { e.fuel = null; e.inv = new Inventory(LOCO_FUEL_SLOTS); e.fuelJ = 0; e.fl = back || undefined; }
   else if (proto === 'fluid-wagon') { e.tf = null; e.tn = 0; }
+  else if (proto === 'artillery-wagon') { e.inv = new Inventory(5); e.rounds = 0; e.tgtU = -1; e.aim = 0; e.fireCd = 0; } // v1.14: артиллерийский вагон — 5 ячеек снарядов
   else { e.inv = new Inventory(WAGON_SLOTS); e.filt = new Array(WAGON_SLOTS).fill(null); e.inv.filt = e.filt; }
   g.ents.set(e.id, e); return e;
 }
@@ -260,13 +289,15 @@ function attach(g: Game, t: Train, proto: string, back0: boolean, rid: number, p
     const e = newCar(g, proto, back); e.tr = t.id; t.cars.push(e.id);
   }
   occupy(g, t); trim(g, G, t); syncCars(g, t); g.trainVer++;
+  const indexNoFuel = !t.manual && t.st === 'nofuel' && t.v === 0;
+  setNoFuelCells(g, t, false); if (indexNoFuel) setNoFuelCells(g, t, true);
   return carE(g, atHead ? t.cars[0] : t.cars[t.cars.length - 1]);
 }
 /** снять вагон: поезд делится на части (каждая остаётся на своём месте) */
 export function removeCar(g: Game, e: Entity) {
   const t = trainOf(g, e); if (!t) return; const G = graph(g);
   for (const pl of plList(g)) if (pl.veh === e.id) exitVehicle(g, pl);
-  const i = t.cars.indexOf(e.id); if (t.v === 0 && t.st === 'wait') setCells(g, t, false);
+  const i = t.cars.indexOf(e.id); setNoFuelCells(g, t, false); if (t.v === 0 && t.st === 'wait') setCells(g, t, false);
   unoccupy(g, t); releaseRes(g, t);
   const before = t.cars.slice(0, i), after = t.cars.slice(i + 1);
   let off = 0; for (let k = 0; k <= i; k++) off += CAR_LEN[carE(g, t.cars[k]).proto] + CAR_GAP;
@@ -350,13 +381,26 @@ function goalsFor(g: Game, G: RailGraph, t: Train, name: string): Goal[] {
   return all.filter(s => stopOpen(g, s, t)).map(mk);
 }
 const hasLoco = (g: Game, t: Train, back: boolean) => t.cars.some(id => { const e = carE(g, id); return e.t === 'loco' && !!e.fl === back; });
+export function trainRouteAvailable(g: Game, t: Train, name: string): boolean {
+  const G = graph(g), goals: Goal[] = [];
+  for (const st of g.ents.values()) if (st.t === 'stop' && (st.sname || 'Станция') === name) { const [x, y, h] = stopNode(st); goals.push({ k: nk(x, y, h), x, y, st }); }
+  if (!goals.length || !t.trail.length) return false;
+  if (hasLoco(g, t, false) && findRoute(g, G, t.id, t.trail[0], eLen(G, t.trail[0]) - t.pos, goals)) return true;
+  if (t.v === 0 && hasLoco(g, t, true)) {
+    let d = trainLen(g, t), p = t.pos, k = 0; while (d > p && k < t.trail.length - 1) { d -= p; k++; p = eLen(G, t.trail[k]); }
+    if (findRoute(g, G, t.id, flip(t.trail[k]), p - d, goals)) return true;
+  }
+  return false;
+}
 /** развернуть поезд (голова ↔ хвост) */
 export function reverseTrain(g: Game, t: Train) {
+  const indexNoFuel = !t.manual && t.st === 'nofuel' && t.v === 0;
+  if (indexNoFuel) setNoFuelCells(g, t, false);
   const G = graph(g); const L = trainLen(g, t);
   let d = L, p = t.pos, k = 0; while (d > p && k < t.trail.length - 1) { d -= p; k++; p = eLen(G, t.trail[k]); }
   const q = p - d; const nt: number[] = []; for (let i = k; i >= 0; i--) nt.push(flip(t.trail[i]));
   unoccupy(g, t); t.trail = nt; t.pos = eLen(G, t.trail[0]) - q; t.cars.reverse(); for (const id of t.cars) { const e = carE(g, id); if (e.t === 'loco') e.fl = !e.fl || undefined; }
-  t.fr = 0; occupy(g, t); trim(g, G, t);
+  t.fr = 0; occupy(g, t); trim(g, G, t); if (indexNoFuel) setNoFuelCells(g, t, true);
 }
 function plan(g: Game, t: Train): boolean {
   const G = graph(g); const rec = t.sched[t.si]; if (!rec) { t.st = 'nosched'; return false; }
@@ -403,6 +447,11 @@ function freeAhead(g: Game, G: RailGraph, t: Train, need: number): number {
   }
   return Infinity;
 }
+/** v1.16: доля тяговых локомотивов с ядерной долей в запасе энергии — бонус не умножается смесью топлива */
+export const NUC_ACC = 0.2, NUC_VMAX = 0.1;
+function nucFrac(g: Game, t: Train): number {
+  let n = 0, k = 0; for (const id of t.cars) { const e = carE(g, id); if (e.t === 'loco' && !e.fl) { n++; if ((e.nj || 0) > 0) k++; } } return n ? k / n : 0;
+}
 function burnLocos(g: Game, t: Train): number {
   let n = 0; for (const id of t.cars) { const e = carE(g, id); if (e.t === 'loco' && !e.fl && g.burn(e, LOCO_KW)) n++; } return n;
 }
@@ -412,8 +461,9 @@ function drive(g: Game, G: RailGraph, t: Train, A: number, want: number) {
   // сопротивление движению — всегда; v1.8: топливо тратится, пока локомотив тянет (разгон и поддержание скорости), а не только при разгоне
   const drag = v > 0 ? Math.floor(v / FRICTION) + 20 : 0;
   if (want > 0) {
-    const vt = Math.min(VMAX, Math.floor(Math.sqrt(2 * dec * Math.max(0, A) * 1000)));
-    if (v <= vt) { const pw = v < vt || drag > 0 ? burnLocos(g, t) : 0; v = Math.max(0, v - drag); if (pw) v = Math.min(vt, v + Math.max(1, Math.floor(pw * LOCO_KW * ACC_K / mass))); else if (!t.manual && v === 0 && vt > 0) t.st = 'nofuel'; }
+    const nf = nucFrac(g, t); // до сжигания: зависит только от сохранённого состояния
+    const vt = Math.min(Math.floor(VMAX * (1 + NUC_VMAX * nf)), Math.floor(Math.sqrt(2 * dec * Math.max(0, A) * 1000)));
+    if (v <= vt) { const pw = v < vt || drag > 0 ? burnLocos(g, t) : 0; v = Math.max(0, v - drag); if (pw) v = Math.min(vt, v + Math.max(1, Math.floor(pw * LOCO_KW * ACC_K * (1 + NUC_ACC * nf) / mass))); else if (!t.manual && v === 0 && vt > 0) t.st = 'nofuel'; }
     else v = Math.max(vt, v - dec);
   } else if (want < 0) v = Math.max(0, v - dec);
   else v = Math.max(0, v - drag);
@@ -473,12 +523,12 @@ function signalStates(g: Game, G: RailGraph) {
     if (ss !== (e.ss ?? 0)) { e.ss = ss || undefined; }
   }
 }
-function cargoSig(g: Game, t: Train) { let h = 0; for (const id of t.cars) { const e = carE(g, id); if (e.proto === 'fluid-wagon') h = (h * 31 + Math.floor((e.tn || 0) * 10)) | 0; if (e.inv) for (let i = 0; i < e.inv.size; i++) { const s = e.inv.slots[i]; if (s) h = (h * 31 + s.count * 7 + s.item.length + i) | 0; } } return h; }
+function cargoSig(g: Game, t: Train) { let h = 0; for (const id of t.cars) { const e = carE(g, id); if (e.proto === 'fluid-wagon') h = (h * 31 + Math.floor((e.tn || 0) * 10)) | 0; if (e.inv && e.t !== 'loco') for (let i = 0; i < e.inv.size; i++) { const s = e.inv.slots[i]; if (s) h = (h * 31 + s.count * 7 + s.item.length + i) | 0; } } return h; }
 /** v1.8: сколько предмета или жидкости в вагонах поезда */
-export function cargoCount(g: Game, t: Train, it: string) { let n = 0; for (const id of t.cars) { const e = carE(g, id); if (e.inv) n += e.inv.count(it); else if (e.tf === it) n += Math.floor(e.tn || 0); } return n; }
+export function cargoCount(g: Game, t: Train, it: string) { let n = 0; for (const id of t.cars) { const e = carE(g, id); if (e.inv && e.t !== 'loco') n += e.inv.count(it); else if (e.tf === it) n += Math.floor(e.tn || 0); } return n; }
 const cmpN = (op: CondOp | undefined, a: number, b: number) => op === '<' ? a < b : op === '=' ? a === b : op === '≠' ? a !== b : a > b;
 function oneCond(g: Game, t: Train, r: WCond): boolean {
-  const cars = t.cars.map(id => carE(g, id)); const wag = cars.filter(e => e.inv), fw = cars.filter(e => e.proto === 'fluid-wagon');
+  const cars = t.cars.map(id => carE(g, id)); const wag = cars.filter(e => e.t === 'wagon' && e.inv), fw = cars.filter(e => e.proto === 'fluid-wagon');
   switch (r.c) {
     case 'full': return wag.length + fw.length > 0 && wag.every(e => e.inv!.slots.every(s => s ? s.count >= ITEMS[s.item].stack : false)) && fw.every(e => (e.tn || 0) >= FWAGON_CAP - 1e-6);
     case 'empty': return wag.every(e => e.inv!.isEmpty()) && fw.every(e => !(e.tn! > 1e-6));
@@ -510,7 +560,7 @@ export function cleanSched(r: any): SchedRec | null {
   return rec;
 }
 /** доля заполнения вагонов (для окна) */
-export function fillPct(g: Game, t: Train) { let have = 0, cap = 0; for (const id of t.cars) { const e = carE(g, id); if (e.proto === 'fluid-wagon') { cap += WAGON_SLOTS; have += (e.tn || 0) / FWAGON_CAP * WAGON_SLOTS; continue; } if (!e.inv) continue; for (const s of e.inv.slots) { cap += 1; if (s) have += s.count / ITEMS[s.item].stack; } } return cap ? Math.round(have / cap * 100) : 0; }
+export function fillPct(g: Game, t: Train) { let have = 0, cap = 0; for (const id of t.cars) { const e = carE(g, id); if (e.proto === 'fluid-wagon') { cap += WAGON_SLOTS; have += (e.tn || 0) / FWAGON_CAP * WAGON_SLOTS; continue; } if (!e.inv || e.t === 'loco') continue; for (const s of e.inv.slots) { cap += 1; if (s) have += s.count / ITEMS[s.item].stack; } } return cap ? Math.round(have / cap * 100) : 0; }
 export let trainMs = 0;
 export function stepTrains(g: Game) {
   if (!g.trains.length) { trainMs = 0; if (g.sigVer && g.tick % 60 === 0) { const G = graph(g); if (G.sig.size) { G.bocc.clear(); signalStates(g, G); } } return; }
@@ -522,7 +572,7 @@ export function stepTrains(g: Game) {
   trainMs = performance.now() - t0;
 }
 function stepTrain(g: Game, G: RailGraph, t: Train) {
-  if (!G.info.has(t.trail[0] >> 1)) return; // рельс снят из-под поезда (не должно случаться)
+  if (!G.info.has(t.trail[0] >> 1)) { setNoFuelCells(g, t, false); return; } // рельс снят из-под поезда (не должно случаться)
   const wasStill = t.v === 0;
   if (t.manual) {
     t.st = 'manual';
@@ -539,7 +589,7 @@ function stepTrain(g: Game, G: RailGraph, t: Train) {
       t.wt++; t.idle++;
       if ((g.tick + t.id) % 30 === 0) { const sg = cargoSig(g, t); if (sg !== t.sig) { t.sig = sg; t.idle = 0; } }
       const r = t.sched[t.si];
-      if (r && (g.tick + t.id) % 10 === 0 && condMet(g, t, r)) { setCells(g, t, false); t.si = (t.si + 1) % t.sched.length; if (t.si === 0) t.laps = (t.laps || 0) + 1; t.tgt = null; t.path = null; t.st = 'go'; t.retry = 0; }
+      if (r && (g.tick + t.id) % 10 === 0 && condMet(g, t, r)) { setNoFuelCells(g, t, false); setCells(g, t, false); t.si = (t.si + 1) % t.sched.length; if (t.si === 0) t.laps = (t.laps || 0) + 1; t.tgt = null; t.path = null; t.st = 'go'; t.retry = 0; }
     }
     if (t.st !== 'wait') {
       if (t.path && t.pv !== g.railVer) { t.path = null; releaseRes(g, t); }
@@ -552,12 +602,13 @@ function stepTrain(g: Game, G: RailGraph, t: Train) {
         const moved = drive(g, G, t, A, 1); t.rem -= moved;
         if (t.v > 0) t.st = 'go'; else if (t.rem > 0 && A <= 0 && t.st !== 'nofuel') t.st = sl <= fa ? 'signal' : 'blocked';
         if ((t.st === 'blocked' && (g.tick + t.id) % 300 === 0) || (t.st === 'signal' && (g.tick + t.id) % 1800 === 0)) { t.path = null; releaseRes(g, t); }
-        if (t.rem <= 0 && t.v === 0) { t.st = 'wait'; t.wt = 0; t.idle = 0; t.sig = cargoSig(g, t); syncCars(g, t); setCells(g, t, true); releaseRes(g, t); }
+        if (t.rem <= 0 && t.v === 0) { t.st = 'wait'; t.wt = 0; t.idle = 0; t.sig = cargoSig(g, t); syncCars(g, t); setNoFuelCells(g, t, false); setCells(g, t, true); releaseRes(g, t); }
       }
     }
   }
   if (t.v > 0 || (g.tick + t.id) % 30 === 0 || wasStill !== (t.v === 0)) syncCars(g, t);
   for (const pl of plList(g)) if (pl.veh != null && t.cars.includes(pl.veh)) { const e = carE(g, pl.veh); if (e._cx != null) { pl.x = e._cx; pl.y = e._cy!; } }
+  setNoFuelCells(g, t, !t.manual && t.st === 'nofuel' && t.v === 0);
 }
 /** поезд сбивает игроков и Рой: урон от массы и скорости */
 function hits(g: Game, G: RailGraph) {
@@ -572,9 +623,9 @@ function hits(g: Game, G: RailGraph) {
 }
 // ---------- после загрузки ----------
 export function restoreTrains(g: Game) {
-  g.rocc.clear(); g.carCells.clear();
+  g.rocc.clear(); g.carCells.clear(); for (const t of g.trains) noFuelCells.delete(t);
   for (const t of g.trains) { occupy(g, t); for (const id of t.cars) { const e = g.ents.get(id); if (e && e.inv && e.filt) e.inv.filt = e.filt; } }
-  for (const t of g.trains) { syncCars(g, t); if (!t.manual && t.st === 'wait') setCells(g, t, true); }
+  for (const t of g.trains) { syncCars(g, t); if (!t.manual && t.st === 'wait') setCells(g, t, true); else if (!t.manual && t.st === 'nofuel' && t.v === 0) setNoFuelCells(g, t, true); }
   // v1.8: резерв блоков восстанавливается из поездов (блок резервирует первый по порядку поезд)
   g.bres.clear(); for (const t of g.trains) if (t.res) { t.res = t.res.filter(b => !g.bres.has(b)); for (const b of t.res) g.bres.set(b, t.id); if (!t.res.length) t.res = undefined; }
 }
@@ -593,7 +644,7 @@ const MOVES: Move[][] = [0, 1, 2, 3, 4, 5, 6, 7].map(h => {
 });
 /** A* по решётке узлов: от (sx, sy) с направлением sh (или любым, если sh < 0) к узлу (tx, ty) (направление th или любое).
  *  free(клетка) — можно ли класть рельс; уже лежащие куски (has) стоят 0. Возвращает куски (с якорем → рамкой) и признак точного попадания. */
-export function planRail(sx: number, sy: number, sh: number, tx: number, ty: number, th: number, free: (x: number, y: number) => boolean, has?: (p: PlanPiece) => boolean, budget = 40000): { pieces: PlanPiece[]; exact: boolean; ex: number; ey: number; eh: number } {
+export function planRail(sx: number, sy: number, sh: number, tx: number, ty: number, th: number, free: (x: number, y: number) => boolean, has?: (p: PlanPiece) => boolean, budget = 40000, cancelled?: () => boolean): { pieces: PlanPiece[]; exact: boolean; ex: number; ey: number; eh: number } {
   const key = (x: number, y: number, h: number) => nk(x, y, h);
   const H = new Heap(); const gs = new Map<number, number>(); const prev = new Map<number, [number, Move | null, number, number, number]>();
   const hz = (x: number, y: number) => Math.floor(Math.hypot(tx - x, ty - y) * U);
@@ -605,8 +656,28 @@ export function planRail(sx: number, sy: number, sh: number, tx: number, ty: num
     const s = SHAPES[m.proto][m.v]; let ok = true; for (const [cx, cy] of s.cells) if (!free(ax + cx, ay + cy)) { ok = false; break; }
     okCache.set(ck, ok); return ok;
   };
+  // Keep long straight previews linear-time instead of letting A* expand thousands of equivalent turns.
+  if (sh >= 0 && th >= 0) {
+    const m = MOVES[sh]?.find(x => x.proto === 'straight-rail' && x.h2 === sh);
+    if (m) {
+      let count = -1;
+      if (!m.dx && tx === sx && m.dy && (ty - sy) % m.dy === 0) count = (ty - sy) / m.dy;
+      else if (!m.dy && ty === sy && m.dx && (tx - sx) % m.dx === 0) count = (tx - sx) / m.dx;
+      else if (m.dx && m.dy && (tx - sx) % m.dx === 0 && (ty - sy) % m.dy === 0 && (tx - sx) / m.dx === (ty - sy) / m.dy) count = (tx - sx) / m.dx;
+      if (count >= 0 && count <= budget) {
+        const pieces: PlanPiece[] = []; let x = sx, y = sy, valid = true;
+        for (let i = 0; i < count; i++, x += m.dx, y += m.dy) {
+          if ((i & 127) === 0 && cancelled?.()) return { pieces: [], exact: false, ex: sx, ey: sy, eh: sh };
+          if (!pieceOk(m, x, y)) { valid = false; break; }
+          const [bx, by] = boxAt(m, x, y); pieces.push({ proto: m.proto, x: bx, y: by, dir: m.v });
+        }
+        if (valid) return { pieces, exact: true, ex: tx, ey: ty, eh: sh };
+      }
+    }
+  }
   let best = -1, bh = Infinity, n = 0;
   while (H.size && n++ < budget) {
+    if ((n & 127) === 0 && cancelled?.()) break;
     const [, c, k] = H.pop(); if (c > gs.get(k)!) continue;
     const pr = prev.get(k)!; const x = pr[2], y = pr[3], h = pr[4];
     const dz = hz(x, y); if (dz < bh || (dz === bh && c < (gs.get(best) ?? Infinity))) { bh = dz; best = k; }
@@ -623,6 +694,91 @@ export function planRail(sx: number, sy: number, sh: number, tx: number, ty: num
   while (k !== -1) { const p = prev.get(k)!; if (!p[1]) break; const pk = p[0]; const pp = prev.get(pk)!; const [bx, by] = boxAt(p[1], pp[2], pp[3]); pieces.push({ proto: p[1].proto, x: bx, y: by, dir: p[1].v }); k = pk; }
   pieces.reverse();
   return { pieces, exact: bh === 0, ex: end[2], ey: end[3], eh: end[4] };
+}
+export interface ParallelRailOptions { tracks?: number; spacing?: number; budget?: number; maxPieces?: number; cancelled?: () => boolean; }
+export interface ParallelRailLane { pieces: PlanPiece[]; offset: number; sx: number; sy: number; exact: boolean; ex: number; ey: number; eh: number; }
+export interface ParallelRailPlan { lanes: ParallelRailLane[]; tracks: number; spacing: number; actualSpacing: number; exact: boolean; reason?: 'invalid-options' | 'blocked' | 'limit' | 'cancelled'; }
+const cellKey = (x: number, y: number) => (x + 65536) * 131072 + y + 65536;
+type RailSegment = [number, number, number, number];
+function railSegments(pieces: PlanPiece[]): RailSegment[] {
+  const out: RailSegment[] = [];
+  for (const p of pieces) { const s = shapeOf(p.proto, p.dir), ax = p.x + s.ox, ay = p.y + s.oy; for (let i = 0; i + 3 < s.pts.length; i += 2) out.push([ax + s.pts[i], ay + s.pts[i + 1], ax + s.pts[i + 2], ay + s.pts[i + 3]]); }
+  return out;
+}
+function pointSegmentGap(px: number, py: number, s: RailSegment): number {
+  const dx = s[2] - s[0], dy = s[3] - s[1], l = dx * dx + dy * dy; let t = l ? ((px - s[0]) * dx + (py - s[1]) * dy) / l : 0;
+  t = Math.max(0, Math.min(1, t)); return Math.hypot(px - s[0] - dx * t, py - s[1] - dy * t);
+}
+function segmentGap(a: RailSegment, b: RailSegment): number {
+  const ax = a[2] - a[0], ay = a[3] - a[1], bx = b[2] - b[0], by = b[3] - b[1], den = ax * by - ay * bx;
+  if (Math.abs(den) > 1e-9) { const cx = b[0] - a[0], cy = b[1] - a[1], t = (cx * by - cy * bx) / den, u = (cx * ay - cy * ax) / den; if (t >= 0 && t <= 1 && u >= 0 && u <= 1) return 0; }
+  return Math.min(pointSegmentGap(a[0], a[1], b), pointSegmentGap(a[2], a[3], b), pointSegmentGap(b[0], b[1], a), pointSegmentGap(b[2], b[3], a));
+}
+/** Exact clearance between rail polylines, with a spatial grid to avoid all-pairs segment checks. */
+function railGap(a: RailSegment[], b: RailSegment[], limit: number): number {
+  const bins = new Map<number, number[]>(), pad = Math.ceil(limit);
+  for (let i = 0; i < b.length; i++) { const s = b[i]; for (let x = Math.floor(Math.min(s[0], s[2]) - pad); x <= Math.floor(Math.max(s[0], s[2]) + pad); x++) for (let y = Math.floor(Math.min(s[1], s[3]) - pad); y <= Math.floor(Math.max(s[1], s[3]) + pad); y++) { const k = cellKey(x, y); let v = bins.get(k); if (!v) bins.set(k, v = []); v.push(i); } }
+  let best = Infinity; const seen = new Set<number>();
+  for (const s of a) { seen.clear(); for (let x = Math.floor(Math.min(s[0], s[2]) - pad); x <= Math.floor(Math.max(s[0], s[2]) + pad); x++) for (let y = Math.floor(Math.min(s[1], s[3]) - pad); y <= Math.floor(Math.max(s[1], s[3]) + pad); y++) { const q = bins.get(cellKey(x, y)); if (!q) continue; for (const i of q) if (!seen.has(i)) { seen.add(i); const d = segmentGap(s, b[i]); if (d < best) best = d; } } }
+  return best;
+}
+function straightLaneGap(a: PlanPiece[], b: PlanPiece[]): number | null {
+  if (!a.length || a.length !== b.length || a.some((p, i) => p.proto !== 'straight-rail' || p.proto !== b[i].proto || p.dir !== b[i].dir)) return null;
+  const dx = b[0].x - a[0].x, dy = b[0].y - a[0].y, s = shapeOf(a[0].proto, a[0].dir), vx = s.b[0], vy = s.b[1];
+  if (Math.abs(dx * vx + dy * vy) > 1e-7) return null;
+  for (let i = 1; i < a.length; i++) if (b[i].x - a[i].x !== dx || b[i].y - a[i].y !== dy) return null;
+  return Math.abs(dx * vy - dy * vx) / Math.hypot(vx, vy);
+}
+function startHeading(p: PlanPiece | undefined, sx: number, sy: number): number {
+  if (!p) return 0; const s = shapeOf(p.proto, p.dir), ax = p.x + s.ox, ay = p.y + s.oy;
+  if (ax === sx && ay === sy) return s.h0;
+  if (ax + s.b[0] === sx && ay + s.b[1] === sy) return (s.h1 + 4) % 8;
+  return s.h0;
+}
+function parallelOffsets(n: number, spacing: number) { return Array.from({ length: n }, (_, i) => (2 * i - n + 1) * spacing / 2); }
+function shiftNode(x: number, y: number, h: number, side: number): [number, number] { return [x - UY[h] * side, y + UX[h] * side]; }
+/** Plan 1–4 independently routed, grid-valid tracks. Curves are solved with the native rail geometry,
+ *  and each later lane is routed around a clearance envelope from every earlier lane. */
+export function planParallelRails(sx: number, sy: number, sh: number, tx: number, ty: number, th: number, free: (x: number, y: number) => boolean, has?: (p: PlanPiece) => boolean, options: ParallelRailOptions = {}): ParallelRailPlan {
+  const tracks = Math.floor(options.tracks ?? 1), spacing = Math.floor(options.spacing ?? 4), budget = Math.max(1, Math.floor(options.budget ?? 40000)), maxPieces = Math.max(1, Math.min(500, Math.floor(options.maxPieces ?? 500)));
+  const fail = (reason: ParallelRailPlan['reason']): ParallelRailPlan => ({ lanes: [], tracks, spacing, actualSpacing: 0, exact: false, reason });
+  if (tracks < 1 || tracks > 4 || spacing < 2 || spacing > 16 || spacing % 2 || (tracks % 2 === 0 && spacing % 4 !== 0) || [sx, sy, tx, ty].some(v => !Number.isInteger(v) || (v & 1))) return fail('invalid-options');
+  if (options.cancelled?.()) return fail('cancelled');
+  const baseline = planRail(sx, sy, sh, tx, ty, th, free, has, budget, options.cancelled);
+  if (options.cancelled?.()) return fail('cancelled');
+  if (!baseline.exact) return fail('blocked');
+  if (baseline.pieces.length > maxPieces) return fail('limit');
+  const sh0 = startHeading(baseline.pieces[0], sx, sy), endH = baseline.eh;
+  const baselineTrack: ParallelRailLane = { ...baseline, offset: 0, sx, sy };
+  // A* routes each lane from its own offset endpoints. If native curve geometry brings two routes
+  // too close, expand their endpoint offset by one legal grid interval and solve the geometry again.
+  const widenBy = tracks % 2 === 0 ? 4 : 2;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (options.cancelled?.()) return fail('cancelled');
+    const laneSpacing = spacing + attempt * widenBy;
+    const offsets = parallelOffsets(tracks, laneSpacing), order = offsets.slice().sort((a, b) => Math.abs(a) - Math.abs(b) || a - b);
+    const byOffset = new Map<number, ParallelRailLane>(); let failed: 'blocked' | 'limit' | undefined;
+    for (const offset of order) {
+      if (tracks % 2 === 1 && offset === 0) { byOffset.set(0, baselineTrack); continue; }
+      if (options.cancelled?.()) return fail('cancelled');
+      const [lx, ly] = shiftNode(sx, sy, sh0, offset), [ex, ey] = shiftNode(tx, ty, endH, offset);
+      const p = planRail(lx, ly, sh0, ex, ey, endH, free, has, budget, options.cancelled);
+      if (options.cancelled?.()) return fail('cancelled');
+      if (p.pieces.length > maxPieces) { failed = 'limit'; break; }
+      if (!p.exact) { failed = 'blocked'; break; }
+      byOffset.set(offset, { ...p, offset, sx: lx, sy: ly });
+    }
+    if (failed) { if (failed === 'limit') return fail(failed); continue; }
+    const lanes = [...byOffset.values()].sort((a, b) => a.offset - b.offset);
+    let actualSpacing = Infinity, valid = true;
+    for (let i = 0; i < lanes.length; i++) for (let j = i + 1; j < lanes.length; j++) {
+      const gap = straightLaneGap(lanes[i].pieces, lanes[j].pieces) ?? railGap(railSegments(lanes[i].pieces), railSegments(lanes[j].pieces), laneSpacing + 2); actualSpacing = Math.min(actualSpacing, gap);
+      if (gap < spacing - 0.05) valid = false;
+    }
+    if (!Number.isFinite(actualSpacing)) actualSpacing = spacing + 2;
+    if (valid && lanes.length === tracks) return { lanes, tracks, spacing, actualSpacing, exact: true };
+  }
+  return fail('blocked');
 }
 function boxAt(m: Move, x: number, y: number): [number, number] { const s = SHAPES[m.proto][m.v]; return [x + m.ax - s.ox, y + m.ay - s.oy]; }
 /** концы рельса как состояния для продолжения пути: [x, y, направление наружу] */

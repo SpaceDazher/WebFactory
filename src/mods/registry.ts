@@ -25,6 +25,7 @@ const SCH = {
   'map-settings': inferTable(Object.values(VAN.map)),
 };
 for (const k of ['order', 'fluid', 'virtual', 'meta'] as const) delete (SCH.item as any)[k]; // служебные — выставляет игра
+for (const k of ['item', 'recipe', 'technology', 'entity'] as const) delete (SCH[k] as any).compat15; // совместимость назначает игра, мод не может её подменить
 delete (SCH.resource as any).res;
 type Kind = keyof typeof SCH;
 const ALIAS: Record<string, Kind> = { item: 'item', fluid: 'item', recipe: 'recipe', technology: 'technology', tech: 'technology', entity: 'entity', building: 'entity', resource: 'resource', 'map-settings': 'map-settings', map: 'map-settings', 'map-gen': 'map-settings' };
@@ -54,7 +55,7 @@ function merge(dst: any, src: any) { for (const k of Object.keys(src)) { if (isO
 const tableOf = (T: Tables, k: Kind): Record<string, any> => k === 'item' ? T.items : k === 'recipe' ? T.recipes : k === 'technology' ? T.techs : k === 'entity' ? T.protos : k === 'resource' ? T.res : T.map;
 
 /** применить включённые моды (порядок — orderMods). Пустой список — встроенные данные. */
-export function applyMods(pkgs: ModPackage[], prio: string[] = [], game = '1.10.0'): ApplyReport {
+export function applyMods(pkgs: ModPackage[], prio: string[] = [], game = '1.11.0'): ApplyReport {
   const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
   const rep: ApplyReport = { loaded: [], failed: [], warnings: [], ms: 0, ops: { add: 0, patch: 0, remove: 0 }, sprites: {}, changed: [] };
   const { order, failed } = orderMods(pkgs, prio, game);
@@ -87,7 +88,7 @@ export function applyMods(pkgs: ModPackage[], prio: string[] = [], game = '1.10.
 function runMod(p: ModPackage, T: Tables, errs: ModError[], warns: ModError[], ops: ApplyReport['ops'], touched: Set<string>, spr: ApplyReport['sprites']) {
   const name = p.info.name;
   const files = Object.keys(p.files).filter(f => /^prototypes\/.+\.json$/i.test(f)).sort();
-  if (!files.length && !Object.keys(p.files).some(f => /^locale\//.test(f))) warns.push({ mod: name, msg: 'в моде нет файлов prototypes/*.json', warn: true });
+  if (!files.length && !p.files['control.js'] && !Object.keys(p.files).some(f => /^locale\//.test(f))) warns.push({ mod: name, msg: 'в моде нет файлов prototypes/*.json', warn: true });
   for (const file of files) {
     const { v, err } = parseJson(p.files[file]); if (err) { errs.push({ mod: name, file, msg: err }); continue; }
     const list = Array.isArray(v) ? v : [v];
@@ -162,6 +163,18 @@ function semantic(kind: Kind, d: any, out: [string, string][], p: ModPackage, sp
   switch (kind) {
     case 'item':
       num('stack', 1, 1e6, true); num('fuel', 0, 1e6);
+      if (d.bioLining && (!['phys', 'fire', 'expl', 'speed', 'energy', 'laser'].includes(d.bioLining.kind) || d.equip?.kind !== 'lining' ||
+        !Number.isFinite(d.bioLining.amount) || d.bioLining.amount <= 0 || d.bioLining.amount > (d.bioLining.kind === 'speed' ? .03 : d.bioLining.kind === 'energy' ? .04 : .06))) out.push(['bioLining', 'недопустимый эффект биоподкладки']);
+      if (d.bioCoating) {
+        const c = d.bioCoating, a = d.am;
+        const maxByKind = { phys: .04, fire: .04, expl: .04, acid: .03, slow: .04, radius: .02, 'fire-duration': .04, accuracy: .04 } as Record<string, number>;
+        const max = maxByKind[c.kind], known = Object.prototype.hasOwnProperty.call(maxByKind, c.kind);
+        const compatible = !!a && (c.kind === 'phys' ? a.dt === 'phys' : c.kind === 'fire' ? a.dt === 'fire' : c.kind === 'expl' ? a.dt === 'expl' :
+          c.kind === 'accuracy' ? a.cat === 'shotgun' : c.kind === 'radius' ? (a.aoe || 0) > 0 : c.kind === 'fire-duration' ? !!a.fire :
+          c.kind === 'acid' || c.kind === 'slow' ? ['bullet', 'shotgun', 'rail', 'rocket', 'shell', 'artillery'].includes(a.cat) : false);
+        if (!known || !a ||
+          !Number.isFinite(c.amount) || c.amount <= 0 || c.amount > max || !compatible) out.push(['bioCoating', 'недопустимое биопокрытие боеприпаса']);
+      }
       if (!ENUM.group.has(d.group)) out.push(['group', `неизвестная группа «${d.group}» (можно: ${[...ENUM.group].join(', ')})`]);
       if (!ENUM.icon.has(d.icon)) out.push(['icon', `неизвестный вид значка «${d.icon}» (можно: ${[...ENUM.icon].slice(0, 30).join(', ')}…) или поле sprite`]);
       sprite('sprite'); break;
@@ -169,13 +182,29 @@ function semantic(kind: Kind, d: any, out: [string, string][], p: ModPackage, sp
       num('time', 0.05, 3600);
       if (!ENUM.cat.has(d.cat)) out.push(['cat', `неизвестная категория «${d.cat}» (можно: ${[...ENUM.cat].join(', ')})`]);
       for (const f of ['in', 'out']) (d[f] || []).forEach((x: any, i: number) => { if (!(x[1] > 0) || x[1] > 1e6) out.push([`${f}[${i}]`, `количество должно быть больше 0, а не ${show(x[1])}`]); });
-      if (!(d.out || []).length) out.push(['out', 'рецепт ничего не производит']); break;
+      if (!(d.out || []).length && !(d.cat === 'bioprocessing' && d.hand === false && d.prod === false && (d.in || []).length > 0)) out.push(['out', 'рецепт ничего не производит']); break;
     case 'technology':
       num('count', 1, 1e7, true); num('time', 0.1, 3600);
       if (d.infinite && !ENUM.bonus.has(d.infinite.bonus)) out.push(['infinite.bonus', `можно: ${[...ENUM.bonus].join(', ')}`]); break;
     case 'entity': {
       const isNew = !VAN.protos[d.id];
       if (isNew && !MOD_ENTITY_TYPES.includes(d.type)) { out.push(['type', `мод не может добавить постройку типа «${d.type}» (можно: ${MOD_ENTITY_TYPES.join(', ')}); свои типы логики — с v1.11`]); break; }
+      if (d.bio != null && d.id !== 'bio-collection-station') out.push(['bio', 'биометаданные разрешены только встроенной станции биосбора']);
+      if (d.id === 'bio-collection-station') {
+        const b = d.bio;
+        if (d.type !== 'bioport' || !b || typeof b !== 'object') out.push(['bio', 'встроенная станция биосбора должна сохранять bioport и профиль bio']);
+        else {
+          const bioNum = (field: string, lo: number, hi: number, integer = false) => {
+            const v = b[field]; if (typeof v !== 'number' || !Number.isFinite(v) || v < lo || v > hi || integer && !Number.isInteger(v))
+              out.push([`bio.${field}`, 'числовое поле профиля станции выходит за допустимые границы']);
+          };
+          bioNum('range', 1, 24); bioNum('robots', 1, 4, true); bioNum('spots', 1, 4, true); bioNum('spotKW', 1, 120);
+          if (!d.energy || d.energy.kind !== 'electric' || typeof d.energy.kW !== 'number' || d.energy.kW < 1 || d.energy.kW > 120)
+            out.push(['energy.kW', 'станция биосбора должна использовать электрическую сеть с мощностью от 1 до 120 кВт']);
+          else if (Number.isFinite(b.spots) && Number.isFinite(b.spotKW) && b.spots * b.spotKW > d.energy.kW)
+            out.push(['bio.spotKW', 'сумма зарядных мест не может превышать мощность станции']);
+        }
+      }
       for (const f of REQ[d.type] || []) if (d[f] == null) out.push([f, `обязательное поле для постройки типа «${d.type}» (пример — "from": "${Object.values(VAN.protos).find(p => p.type === d.type)?.id}")`]);
       num('w', 1, 12, true); num('h', 1, 12, true); num('hp', 1, 1e6); num('mineTime', 0, 60); num('speed', 0.001, 1000); num('slots', 1, 400, true); num('modules', 0, 8, true);
       if (d.energy && !['burner', 'electric'].includes(d.energy.kind)) out.push(['energy.kind', 'можно: burner, electric']);
@@ -202,6 +231,10 @@ function crossCheck(T: Tables, mod: string, errs: ModError[], warns: ModError[],
       if (!d.packs.length && !d.infinite) warns.push({ mod, id, field: 'packs', msg: 'технология без пакетов науки изучится мгновенно', warn: true });
     }
     if (k === 'item' && d.place != null && !T.protos[d.place]) E(id, 'place', `нет постройки «${d.place}»`);
+    if (k === 'item' && d.bioCoating) {
+      const source = T.items[d.bioCoating.source];
+      if (!source?.am || source.id === id || source.bioCoating || source.id.startsWith('bio-coated-') || source.am.cat !== d.am?.cat) E(id, 'bioCoating.source', 'нужен исходный непокрытый боеприпас той же категории');
+    }
     if (k === 'entity' && d.buildable !== false && !Object.values(T.items).some(i => i.place === id)) warns.push({ mod, id, msg: 'ни один предмет не ставит эту постройку (поле place у предмета)', warn: true });
     if (k === 'item' && !d.hidden && d.group !== 'fluid' && !Object.values(T.recipes).some(r => r.out.some(o => o[0] === id)) && !['raw'].includes(d.group)) warns.push({ mod, id, msg: 'нет рецепта, который делает этот предмет', warn: true });
     if (k === 'recipe' && !d.enabled && !Object.values(T.techs).some(t => t.unlocks.includes(id))) warns.push({ mod, id, msg: 'рецепт выключен и не открывается ни одной технологией', warn: true });
@@ -222,6 +255,15 @@ function removeCascade(T: Tables, kind: Kind, id: string, warn: (m: string) => v
 }
 /** записать таблицы в общие объекты и пересчитать производные списки */
 function write(T: Tables) {
+  const unchanged = (a: any, b: any) => {
+    if (!a || !b) return false;
+    const { compat15: _a, ...av } = a; const { compat15: _b, ...bv } = b;
+    return JSON.stringify(av) === JSON.stringify(bv);
+  };
+  const stamp = (now: Record<string, any>, vanilla: Record<string, any>) => {
+    for (const [id, d] of Object.entries(now)) if (!vanilla[id] || vanilla[id].compat15 === false || !unchanged(d, vanilla[id])) d.compat15 = false;
+  };
+  stamp(T.items, VAN.items); stamp(T.protos, VAN.protos); stamp(T.recipes, VAN.recipes); stamp(T.techs, VAN.techs);
   const put = (dst: Record<string, any>, src: Record<string, any>, order?: string[]) => { for (const k of Object.keys(dst)) delete dst[k]; for (const k of order || Object.keys(src)) if (src[k]) dst[k] = src[k]; };
   // предметы: встроенные по порядку (с сигналами), затем добавленные модами
   const itemKeys = [...VAN_IDS.filter(k => T.items[k]), ...Object.keys(T.items).filter(k => !VAN.items[k])];
@@ -233,7 +275,7 @@ function write(T: Tables) {
   put(RECIPES, T.recipes, T.recipeOrder);
   RECIPE_LIST.length = 0; RECIPE_LIST.push(...T.recipeOrder.filter(r => T.recipes[r]));
   for (const o of [RECIPE_FOR, SMELT_BY_INPUT]) for (const k of Object.keys(o)) delete o[k];
-  for (const id of RECIPE_LIST) { const x = RECIPES[id]; if (x.cat === 'crafting' && x.hand && !RECIPE_FOR[x.out[0][0]]) RECIPE_FOR[x.out[0][0]] = x.id; if (x.cat === 'smelting') SMELT_BY_INPUT[x.in[0][0]] = x.id; }
+  for (const id of RECIPE_LIST) { const x = RECIPES[id]; if (x.cat === 'crafting' && x.hand && x.out.length && !RECIPE_FOR[x.out[0][0]]) RECIPE_FOR[x.out[0][0]] = x.id; if (x.cat === 'smelting') SMELT_BY_INPUT[x.in[0][0]] = x.id; }
   put(TECHS, T.techs, T.techOrder); TECH_LIST.length = 0; TECH_LIST.push(...T.techOrder.filter(t => T.techs[t]).map(t => T.techs[t]));
   put(RESOURCES, T.res); put(MAPGEN, T.map);
 }

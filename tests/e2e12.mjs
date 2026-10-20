@@ -4,35 +4,33 @@
 //  • сохранение → IndexedDB → перезагрузка страницы → продолжение;
 //  • колесо мыши (deltaMode строки/пиксели), тачпад (мелкие дельты, щипок ctrl+wheel), жесты Safari, Ctrl+щелчок на Mac;
 //  • пресеты графики для слабых ПК: разрешение, ограничение кадров, ?gfx=min, масштаб интерфейса без CSS zoom.
-// Запуск: npx tsx tests/e2e12.mjs [chromium|firefox|webkit] (без аргумента — все три по очереди).
-// WebKit: Playwright 1.49 со сборкой WebKit для Ubuntu 20.04 в /data/pwold (см. README) — если её нет, движок пропускается.
+// Запуск: tsx tests/e2e12.mjs [chromium|firefox|webkit] (без аргумента — все три по очереди).
+// WebKit запускается из кеша, установленного для версии Playwright проекта.
+import { launchBrowser, selectedBrowser, appUrl, projectRoot } from './browser.mjs';
 import fs from 'fs';
 import os from 'os';
 import { spawnSync } from 'child_process';
 import { ledger, diffLedger } from '../src/sim/compat.ts';
 import { unpackStr, packStr } from '../src/core/pack.ts';
 
-const WK = { PW: '/data/pwold/node_modules/playwright/index.mjs', PLAYWRIGHT_BROWSERS_PATH: '/data/pwold/browsers', PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS: '1', PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: 'ubuntu20.04-x64' };
-const name = process.argv[2];
+const name = process.env.PW_BROWSER || process.argv[2];
 if (!name) {
   let bad = 0; const sum = [];
   for (const n of ['chromium', 'firefox', 'webkit']) {
-    if (n === 'webkit' && !fs.existsSync(WK.PW)) { console.log('\n=== webkit: пропущен (нет /data/pwold)'); continue; }
-    const env = { ...process.env, ...(n === 'webkit' ? WK : {}) };
+    const env = process.env;
     const r = spawnSync(process.execPath, [...process.execArgv, process.argv[1], n], { stdio: 'inherit', env });
     sum.push(`${n}: ${r.status === 0 ? 'OK' : 'ПРОВАЛ'}`); if (r.status !== 0) bad++;
   }
   console.log('\n' + sum.join(' · ')); process.exit(bad ? 1 : 0);
 }
-const pw = (await import(process.env.PW || 'playwright')).default;
 const DIR = 'tests/saves', man = JSON.parse(fs.readFileSync(DIR + '/MANIFEST.json', 'utf8'));
 const saves = Object.fromEntries(man.files.map(m => [m.file.replace('.z7save', ''), { ...m, str: fs.readFileSync(`${DIR}/${m.file}`, 'utf8').trim() }]));
 let fails = 0; const errs = []; const nums = {};
 const ok = (c, m) => { console.log((c ? '  ✔ ' : '  ✘ ') + m); if (!c) fails++; };
-const URL0 = 'file:///data/game/dist/index.html';
-const launch = name === 'chromium' ? { executablePath: '/usr/local/bin/chromium', args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--use-gl=angle'] }
+const URL0 = appUrl(import.meta.url);
+const launch = name === 'chromium' ? { args: ['--enable-unsafe-swiftshader', '--use-gl=angle'] }
   : name === 'firefox' ? { firefoxUserPrefs: { 'webgl.force-enabled': true, 'webgl.disabled': false } } : {};
-const b = await pw[name].launch(launch);
+const b = await launchBrowser(name, launch);
 console.log(`\n=== ${name} ${b.version()}`);
 const watch = p => { p.on('pageerror', e => errs.push('PAGEERROR ' + e.message)); p.on('console', m => { if (m.type() === 'error') errs.push('CONSOLE ' + m.text().slice(0, 300)); }); };
 const ready = async (p, t = 300000) => { await p.waitForFunction(() => window.__texMs != null && window.__zavod && window.__started !== false && (!window.__zavod.sim || window.__zavod.sim.snaps > 2), null, { timeout: t }); await p.waitForTimeout(300); };
@@ -62,6 +60,8 @@ await p.evaluate(async ({ legacy, strs }) => {
   localStorage.setItem('zavod7:meta', JSON.stringify(meta));
 }, { legacy, strs: legacy.map(k => saves[k].str) });
 await p.reload(); await ready(p);
+// The previous worker was destroyed by reload, so pause and acknowledge the new worker before measuring snapshot consistency.
+await p.evaluate(async () => { const z = window.__zavod; z.sim.post({ t: 'pause', paused: true }); await z.workerEval('return g.tick'); });
 const mig = await p.evaluate(async legacy => { const z = window.__zavod; const out = {}; for (const k of legacy) out[k] = { ls: localStorage.getItem('zavod7:' + k) != null, idb: await z.store.get(k) }; return { out, tick: z.game.tick, rep: await z.workerEval('return g.loadReport ? { era: g.loadReport.era } : null') }; }, legacy);
 ok(legacy.every(k => !mig.out[k].ls), 'в localStorage старых слотов не осталось');
 ok(legacy.every(k => mig.out[k].idb === saves[k].str), 'все 4 перенесены в IndexedDB байт в байт');
@@ -75,15 +75,23 @@ await p.evaluate(async items => { const z = window.__zavod; const meta = JSON.pa
   Object.keys(saves).filter(k => saves[k].storage === 'indexeddb').map(k => [slotOf(k), saves[k].str]));
 for (const k of Object.keys(saves)) {
   const m = saves[k]; t0 = Date.now();
-  const r = await p.evaluate(async slot => { const z = window.__zavod; z.sim.post({ t: 'pause', paused: true }); const al = window.alert; let alerted = null; window.alert = s => { alerted = s; };
-    await z.loadFrom(slot); const sv = await z.sim.save({}); window.alert = al;
-    const ev = await z.workerEval('return { rep: g.loadReport, steel: g.enabled.has("steel-chest"), ents: g.ents.size, units: g.units.length }');
-    return { str: sv.str, alerted, ...ev }; }, slotOf(k));
+  const r = await p.evaluate(async ({ slot, storage, str }) => { const z = window.__zavod, snaps0 = z.sim.snaps; z.sim.post({ t: 'pause', paused: true }); const al = window.alert; let alerted = null; window.alert = s => { alerted = s; };
+    if (storage === 'file') await z.ui.h.loadSaveString(str); else await z.loadFrom(slot); // file fixtures enter through the same string-import path as the file chooser
+    // Loading closes the startup menu, which resumes the worker; pause again before checking the mirror.
+    z.sim.post({ t: 'pause', paused: true }); await z.workerEval('return g.tick');
+    const sv = await z.sim.save({}); window.alert = al;
+    const ev = await z.workerEval('return { rep: g.loadReport, steel: g.enabled.has("steel-chest"), ents: g.ents.size, units: g.units.length, seed: g.seed, tick: g.tick, inv: g.inv.items() }');
+    // Wait for the ordinary worker snapshot before comparing the mirror's player state; world entities in the mirror are viewport-scoped.
+    await new Promise(resolve => { const end = Date.now() + 2000; const poll = () => { if ((z.sim.snaps > snaps0 && z.game.tick === ev.tick) || Date.now() >= end) resolve(); else setTimeout(poll, 20); }; poll(); });
+    const mirror = { seed: z.game.seed, tick: z.game.tick, inv: z.game.inv.items() };
+    return { str: sv.str, savedTick: sv.tick, alerted, mirror, ...ev }; }, { slot: slotOf(k), storage: m.storage, str: m.str });
   const ms = Date.now() - t0;
   if (r.alerted) { ok(false, `${k}: ${r.alerted}`); continue; }
   const s = await unpackStr(r.str); const skip = m.ledger.tele === -1 ? ['tele'] : [];
   const d = diffLedger(m.ledger, ledger(s), { skip, fluidTol: 1e-6 });
-  ok(d.length === 0 && Object.keys(r.rep.dropped).length === 0, `${k} (${m.storage}): ${r.ents} построек${r.units ? ', ' + r.units + ' юнитов Роя' : ''} — ${d.length ? 'потери: ' + d.slice(0, 5).join('; ') : 'без потерь'}, ${ms} мс`);
+  const mirrorSynced = r.mirror.seed === r.seed && r.mirror.tick === r.tick && JSON.stringify(r.mirror.inv) === JSON.stringify(r.inv);
+  ok(mirrorSynced, `${k}: зеркало совпало с Worker по seed/tick/инвентарю игрока (${r.mirror.seed}/${r.mirror.tick})`);
+  ok(r.ents === m.ents && r.seed === m.ledger.seed && r.savedTick === m.ledger.tick && d.length === 0 && Object.keys(r.rep.dropped).length === 0, `${k} (${m.storage}): Worker сохранил ${r.ents} построек из ${r.seed}, тик ${r.savedTick}${r.units ? ', ' + r.units + ' юнитов Роя' : ''} — ${d.length ? 'потери: ' + d.slice(0, 5).join('; ') : 'без потерь'}, ${ms} мс`);
   if (k === 'v0.2-oil-swarm') ok(r.steel, 'v0.2: «Обработка стали» открывает стальной сундук');
 }
 // партия идёт дальше
@@ -109,9 +117,16 @@ const [fc] = await Promise.all([p.waitForEvent('filechooser'), p.evaluate(() => 
 await fc.setFiles(tmp); await p.waitForTimeout(1500);
 const imp = await p.evaluate(() => window.__zavod.workerEval('return { n: g.ents.size, era: g.loadReport && g.loadReport.era }'));
 ok(imp.n === saves['v0.2-early'].ents && imp.era === 'v0.2', `файл с BOM и CRLF открыт: ${imp.era}, ${imp.n} построек`);
-const rep = await p.evaluate(async () => { const z = window.__zavod; const t = await z.ui.h.bugReport('проверка rc5', true); const tick = z.game.tick, n = z.game.ents.size; z.ui.h.newGame(5, 'peaceful'); await new Promise(r => setTimeout(r, 500));
-  const n0 = z.game.ents.size; await z.ui.h.loadSaveString(t); await new Promise(r => setTimeout(r, 800)); return { len: t.length, tick, n, n0, n2: z.game.ents.size, tick2: z.game.tick }; });
-ok(rep.n2 === rep.n && rep.n0 !== rep.n && rep.tick2 >= rep.tick, `отчёт (${Math.round(rep.len / 1024)} КБ) → партия восстановлена: ${rep.n2} построек`);
+const rep = await p.evaluate(async () => { const z = window.__zavod; z.sim.post({ t: 'pause', paused: true }); await z.workerEval('return g.tick');
+  const before = await z.workerEval('return { tick: g.tick, n: g.ents.size, seed: g.seed, inv: g.inv.items() }'); const t = await z.ui.h.bugReport('проверка rc5', true);
+  z.ui.h.newGame(5, 'peaceful'); z.sim.post({ t: 'pause', paused: true }); const fresh = await z.workerEval('return { tick: g.tick, n: g.ents.size }'); const snaps0 = z.sim.snaps;
+  await z.ui.h.loadSaveString(t); z.sim.post({ t: 'pause', paused: true }); const restored = await z.workerEval('return { tick: g.tick, n: g.ents.size, seed: g.seed, inv: g.inv.items() }');
+  const end = Date.now() + 2000; while ((z.sim.snaps <= snaps0 || z.game.tick !== restored.tick) && Date.now() < end) await new Promise(r => setTimeout(r, 20));
+  return { len: t.length, tick: before.tick, n: before.n, seed: before.seed, inv: before.inv, n0: fresh.n, n2: restored.n, tick2: restored.tick, seed2: restored.seed, inv2: restored.inv,
+    mirrorSeed: z.game.seed, mirrorInv: z.game.inv.items(), mirrorTick: z.game.tick }; });
+const reportSame = rep.n2 === rep.n && rep.n0 !== rep.n && rep.tick2 >= rep.tick && JSON.stringify(rep.inv2) === JSON.stringify(rep.inv);
+const mirrorReady = rep.mirrorSeed === rep.seed2 && rep.mirrorTick === rep.tick2 && JSON.stringify(rep.mirrorInv) === JSON.stringify(rep.inv2);
+ok(reportSame && mirrorReady, `отчёт (${Math.round(rep.len / 1024)} КБ) → партия восстановлена: ${rep.n2} построек (Worker ${rep.seed}/${rep.tick}/${rep.n} → ${rep.seed2}/${rep.tick2}/${rep.n2}; new ${rep.n0}; mirror ${rep.mirrorSeed}/${rep.mirrorTick}/${JSON.stringify(rep.mirrorInv) === JSON.stringify(rep.inv2)})`);
 // ошибки: файл из будущей версии и мусор — текущая партия не трогается
 const fut = await packStr({ v: 99, seed: 1, tick: 1, ents: [] });
 const bad = await p.evaluate(async fut => { const z = window.__zavod; const n = z.game.ents.size; const res = [];

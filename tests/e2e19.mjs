@@ -1,27 +1,27 @@
 // E2E v1.5 «Схемотехника»: провод в руке — два щелчка соединяют, повторные — разрывают; окно манипулятора — блок
 // «Схемотехника» (условие: выбор сигнала, знак, число с клавиатуры); схема «манипулятор держит в сундуке ≤ 20» работает;
 // постоянный комбинатор (выбор сигнала, число) зажигает лампу цветом; провода и Alt-значки нарисованы (WebGL2 и Canvas2D); EN без кириллицы.
-// Запуск: node tests/e2e19.mjs [chromium|firefox|webkit] (без аргумента — все три; WebKit — из /data/pwold).
+// Запуск: node tests/e2e19.mjs [chromium|firefox|webkit] (без аргумента — все три; WebKit — из кеша Playwright).
+import { launchBrowser, selectedBrowser, appUrl, projectRoot } from './browser.mjs';
+import { startGameplay } from './gameplay-start.mjs';
 import fs from 'fs';
 import { spawnSync } from 'child_process';
-const WK = { PW: '/data/pwold/node_modules/playwright/index.mjs', PLAYWRIGHT_BROWSERS_PATH: '/data/pwold/browsers', PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS: '1', PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: 'ubuntu20.04-x64' };
-const name = process.argv[2];
+const name = process.env.PW_BROWSER || process.argv[2];
 if (!name) {
   let bad = 0; const sum = [];
   for (const n of ['chromium', 'firefox', 'webkit']) {
-    if (n === 'webkit' && !fs.existsSync(WK.PW)) { console.log('\n=== webkit: пропущен (нет /data/pwold)'); continue; }
-    const r = spawnSync(process.execPath, [process.argv[1], n], { stdio: 'inherit', env: { ...process.env, ...(n === 'webkit' ? WK : {}) } });
+    const r = spawnSync(process.execPath, [process.argv[1], n], { stdio: 'inherit', env: process.env });
     sum.push(`${n}: ${r.status === 0 ? 'OK' : 'ПРОВАЛ'}`); if (r.status !== 0) bad++;
   }
   console.log('\n' + sum.join(' · ')); process.exit(bad ? 1 : 0);
 }
-const pw = (await import(process.env.PW || 'playwright')).default;
 let fails = 0; const errs = [];
 const ok = (c, m) => { console.log((c ? '  ✔ ' : '  ✘ ') + m); if (!c) fails++; };
-const URL0 = 'file:///data/game/dist/index.html';
-const VER = JSON.parse(fs.readFileSync('/data/game/package.json', 'utf8')).version;
-fs.mkdirSync('/data/game/shots', { recursive: true });
-const b = await pw[name].launch(name === 'chromium' ? { executablePath: '/usr/local/bin/chromium', args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--use-gl=angle'] } : {});
+const URL0 = appUrl(import.meta.url);
+const ROOT = projectRoot(import.meta.url);
+const VER = JSON.parse(fs.readFileSync(ROOT + '/package.json', 'utf8')).version;
+fs.mkdirSync(ROOT + '/shots', { recursive: true });
+const b = await launchBrowser(name, name === 'chromium' ? { args: ['--enable-unsafe-swiftshader', '--use-gl=angle'] } : {});
 console.log(`\n=== ${name} ${b.version()} (игра ${VER})`);
 const watch = p => { p.on('pageerror', e => errs.push('PAGEERROR ' + e.message)); p.on('console', m => { if (m.type() === 'error') errs.push('CONSOLE ' + m.text().slice(0, 300)); }); };
 const ready = async p => { await p.waitForFunction(() => window.__texMs != null && window.__zavod && (!window.__zavod.sim || window.__zavod.sim.snaps > 2), null, { timeout: 300000 }); await p.waitForTimeout(300); };
@@ -41,7 +41,7 @@ const SCENE = `
     let ok = true; for (let ty = by; ty < by + h && ok; ty++) for (let tx = bx; tx < bx + w && ok; tx++) if (g.world.terrain(tx, ty) >= 3 || g.world.occ(tx, ty) >= 0 || g.world.res(tx, ty)) ok = false;
     if (ok) { for (let ty = by; ty < by + h; ty++) for (let tx = bx; tx < bx + w; tx++) if (g.world.decor(tx, ty)) g.world.removeDecor(tx, ty); return { x: bx, y: by }; } } return null; };
   const A = land(16, 8); if (!A) return null;
-  g.research.done.add('circuit-network'); g.sat = () => 1;
+  g.research.done.add('circuit-network'); g.sat = () => 0;
   g.player.x = A.x + 5; g.player.y = A.y + 5;
   const S = g.build('iron-chest', A.x + 1, A.y + 1, 0, false); S.inv.add('iron-plate', 300);
   const I = g.build('fast-inserter', A.x + 2, A.y + 1, 1, false);
@@ -58,6 +58,7 @@ for (const mode of ['webgl', 'canvas']) {
   await ctx.addInitScript(() => localStorage.setItem('zavod7:seenVersion', '9.9.9'));
   const p = await ctx.newPage(); watch(p);
   await p.goto(URL0 + `?render=${mode}&gfx=low`); await ready(p);
+  await startGameplay(p);
   const rmode = await p.evaluate(() => window.__zavod.R.mode);
   await p.evaluate(() => window.__zavod.ui.close());
   const sc = await W(p, SCENE);
@@ -83,6 +84,7 @@ for (const mode of ['webgl', 'canvas']) {
   ok((await wires()).split(',').length === 1, 'снова соединены; Esc убирает провод из руки');
 
   console.log('2. Окно манипулятора: условие «железная пластина < 20»');
+  // Keep the wired fixture idle while the player configures the threshold in the UI.
   await p.evaluate(id => window.__zavod.ui.toggle('ent', id), sc.ins); await p.waitForTimeout(700);
   let t = await p.evaluate(() => document.getElementById('win').innerText);
   ok(/Схемотехника/.test(t) && /Красная сеть/.test(t) && /следующем тике/.test(t), 'блок «Схемотехника»: красная сеть, пометка о задержке в 1 тик');
@@ -96,6 +98,7 @@ for (const mode of ['webgl', 'canvas']) {
   await p.waitForTimeout(500);
   let cc = await W(p, `return g.ents.get(${sc.ins}).cc;`);
   ok(cc && cc.en && cc.en.a === 'iron-plate' && cc.en.op === '<' && cc.en.n === 20, `условие: ${JSON.stringify(cc?.en)}`);
+  await W(p, 'g.sat = () => 1; return true;');
   ok(await until(p, id => { const e = window.__zavod.game.ents.get(id); return e && e.status === 'disabled'; }, sc.ins, 30000), 'манипулятор выключился условием');
   const n = await W(p, `return g.ents.get(${sc.dst}).inv.count('iron-plate');`);
   ok(n >= 20 && n <= 21, `в сундуке ${n} (≤ 20 + рука)`);
@@ -119,12 +122,14 @@ for (const mode of ['webgl', 'canvas']) {
   ok(sig && sig.s === 'signal-blue' && sig.n === 7, `сигнал комбинатора: ${JSON.stringify(sig)}`);
   await p.evaluate(() => window.__zavod.ui.close());
   await p.evaluate(id => window.__zavod.ui.toggle('ent', id), sc.lamp); await p.waitForTimeout(600);
-  await down(p, '[data-act="cen"]'); await p.waitForTimeout(400); await down(p, '[data-act="ca"]'); await p.waitForTimeout(400);
-  await down(p, '[data-act="pick"][data-item="signal-blue"]'); await p.waitForTimeout(400);
+  await down(p, '[data-act="cen"]'); await p.waitForSelector('[data-act="ca"]', { timeout: 5000 });
+  await down(p, '[data-act="ca"]'); await p.waitForSelector('[data-act="pick"][data-item="signal-blue"]', { timeout: 5000 });
+  await down(p, '[data-act="pick"][data-item="signal-blue"]');
+  const lampSignalPicked = await until(p, id => window.__zavod.game.ents.get(id)?.cc?.en?.a === 'signal-blue', sc.lamp, 5000);
   await down(p, '[data-act="cop"]'); await p.waitForTimeout(400); // < → >
   await down(p, '[data-act="ccol"]'); await p.waitForTimeout(600);
   const lamp = await W(p, `const e = g.ents.get(${sc.lamp}); return { cc: e.cc, active: e.active, col: e.ccol };`);
-  ok(lamp.cc.en.op === '>' && lamp.cc.col && lamp.active && lamp.col === '#3a7bff', `лампа: «синий > 0», горит синим (${lamp.col})`);
+  ok(lampSignalPicked && lamp.cc.en.a === 'signal-blue' && lamp.cc.en.op === '>' && lamp.cc.col && lamp.active && lamp.col === '#3a7bff', `лампа: «синий > 0», горит синим (${lamp.col})`);
   await p.evaluate(() => window.__zavod.ui.close());
 
   console.log('4. Провода и Alt-значки нарисованы');

@@ -6,6 +6,8 @@ import fs from 'fs';
 import { Game, Command, BUILD_RANGE, MINE_RANGE } from '../../src/sim/game';
 import { serialize, deserialize, stateHash } from '../../src/sim/save';
 import { PROTOS } from '../../src/data/entities';
+import { CHALLENGES } from '../../src/data/challenges';
+import { parseScnText, type Scenario } from '../../src/sim/scenario';
 import { ITEMS } from '../../src/data/items';
 import { RECIPES } from '../../src/data/recipes';
 import type { Blueprint, BpEnt } from '../../src/sim/blueprint';
@@ -24,8 +26,19 @@ export class Bot {
   logs: string[] = []; checkpoints: Checkpoint[] = []; ckEvery: number; nextCk: number;
   phase = ''; walked = 0; started = Date.now(); verbose: boolean;
   blueprints: Blueprint[] = []; pasted = 0;
+  private recoveryPoint: { x: number; y: number; tick: number; hadInventory: boolean } | null = null;
+  private walkEpoch = 0;
+  private rememberDeath() {
+    if (!this.g.player.dead) return;
+    const cp = [...this.g.corpses].reverse().find(c => c.x === this.px && c.y === this.py);
+    this.recoveryPoint = { x: this.px, y: this.py, tick: cp?.tick ?? this.g.tick, hadInventory: !!cp };
+  }
   constructor(seed: number, o: { checkpointMin?: number; verbose?: boolean } = {}) {
-    this.g = new Game(seed, true, { enemies: 'none' });
+    const en = (process.env.BOT_ENEMIES || 'none') as 'none' | 'peaceful' | 'normal' | 'deathworld'; // v1.14.1: --enemies normal — бот играет с Роем и обороной
+    // v1.15: --scn z7-rocket-8h (id встроенного испытания) или путь к файлу .z7scn — бот играет сценарий
+    let scn: Scenario | null = null; const sa = process.env.BOT_SCN;
+    if (sa) { scn = CHALLENGES().find(c => c.id === sa) || parseScnText(fs.readFileSync(sa, 'utf8')).scn; if (!scn) throw new Error('сценарий не найден: ' + sa); }
+    this.g = new Game(scn ? scn.seed : seed, true, { enemies: scn && !process.env.BOT_ENEMIES ? scn.rules.enemies : en }, scn || undefined);
     this.plan = new Plan(this.g);
     this.ckEvery = (o.checkpointMin ?? 30) * 3600; this.nextCk = this.ckEvery; this.verbose = !!o.verbose;
   }
@@ -33,16 +46,21 @@ export class Bot {
   // ---------- симуляция ----------
   cmd(c: Command) { this.g.enqueue(c); if (this.shadow) this.shadow.enqueue(JSON.parse(JSON.stringify(c))); }
   tick() {
+    const wasDead = this.g.player.dead;
+    if (wasDead && !this.recoveryPoint) this.rememberDeath();
     this.g.enqueue({ ...this.input }); this.g.step();
     if (this.shadow) {
       this.shadow.enqueue({ ...this.input }); this.shadow.step();
       if (--this.shadowLeft <= 0) { const a = stateHash(this.g), b = stateHash(this.shadow); this.shadow = null; const ck = this.checkpoints[this.checkpoints.length - 1]; ck.lockstep = a === b; if (a !== b) throw new BotError(`детерминизм: после загрузки игра разошлась с копией (${a} ≠ ${b})`); }
     }
+    if (!wasDead && this.g.player.dead) { this.rememberDeath(); this.onDeath(); }
     if (this.g.tick % 60 === 0) this.onSecond();
     if (this.g.tick >= this.nextCk) { this.nextCk += this.ckEvery; this.checkpoint(); }
   }
   /** раз в игровую секунду (в том числе во время стройки и ходьбы) */
   onSecond() {}
+  /** Death is observed on the simulation boundary, even between guard tasks. */
+  onDeath() {}
   /** Сохранение → строка (тот же формат, что .z7save) → загрузка; дальше бот играет уже загруженную партию. */
   checkpoint(): Checkpoint {
     this.onCheckpoint();
@@ -64,7 +82,48 @@ export class Bot {
   static pack(o: any) { return '0' + zlib.deflateSync(Buffer.from(JSON.stringify(o))).toString('base64'); }
   static unpack(s: string) { return JSON.parse(zlib.inflateSync(Buffer.from(s.slice(1), 'base64')).toString()); }
   /** выполнить задачу до конца */
-  run<T>(t: Task<T>): T { for (;;) { const r = t.next(); if (r.done) return r.value; const n = (r.value as number) || 1; for (let i = 0; i < n; i++) this.tick(); } }
+  run<T>(t: Task<T>): T { t = this.withRecovery(t); for (;;) { const r = t.next(); if (r.done) return r.value; const n = (r.value as number) || 1; for (let i = 0; i < n; i++) this.tick(); } }
+  /** The scheduler resumes interrupted actions only after real respawn and pickup.
+   * No simulation state, inventory or position is restored by the bot itself. */
+  *withRecovery<T>(t: Task<T>): Task<T> {
+    for (;;) {
+      if (this.g.player.dead || this.recoveryPoint) yield* this.recover();
+      const r = t.next(); if (r.done) return r.value; yield r.value;
+    }
+  }
+  private *waitForLife(): Task {
+    if (!this.g.player.dead) return;
+    this.rememberDeath();
+    const input = { ...this.input };
+    this.input = { t: 'input', mx: 0, my: 0, mine: null };
+    try { yield* this.until(() => !this.g.player.dead, Math.max(300, this.g.player.respawn) + 60, 'возрождение', 1); }
+    finally { this.input = input; }
+    this.walkEpoch++;
+  }
+  private *recover(): Task {
+    const input = { ...this.input };
+    this.input = { t: 'input', mx: 0, my: 0, mine: null };
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        yield* this.waitForLife();
+        const point = this.recoveryPoint;
+        if (!point) return;
+        const corpse = () => this.g.corpses.find(c => c.tick === point.tick && c.x === point.x && c.y === point.y);
+        if (point.hadInventory && !corpse()) throw new BotError('тело с инвентарём больше недоступно', point);
+        if (corpse()) {
+          yield* this.near(point.x, point.y, 2, 'инвентарь после гибели');
+          if (this.g.player.dead || this.recoveryPoint !== point) throw new BotError('повторная гибель при восстановлении инвентаря', { original: point, latest: this.recoveryPoint });
+          this.cmd({ t: 'pickup' }); yield;
+          if (this.g.player.dead || this.recoveryPoint !== point) throw new BotError('повторная гибель при восстановлении инвентаря', { original: point, latest: this.recoveryPoint });
+          if (corpse()) throw new BotError('не удалось забрать весь инвентарь после гибели', point);
+        }
+        this.recoveryPoint = null; this.walkEpoch++;
+        this.log('возрождение: инвентарь забран, прерванная задача продолжается');
+        return;
+      }
+      throw new BotError('повторная гибель при восстановлении инвентаря', this.recoveryPoint);
+    } finally { this.input = input; }
+  }
   *wait(n: number): Task { if (n > 0) yield n; }
   *until(cond: () => boolean, maxTicks: number, what: string, step = 10): Task {
     const end = this.g.tick + maxTicks; while (!cond()) { if (this.g.tick > end) throw new BotError('не дождался: ' + what); yield step; }
@@ -78,14 +137,19 @@ export class Bot {
   inReach(e: { x: number; y: number; w: number; h: number }) { const [cx, cy] = center(e); return this.dist(cx, cy) <= REACH; }
   /** дойти до клетки, где cond(x,y) (по центру клетки); hx,hy — ориентир для эвристики */
   *walk(cond: (x: number, y: number) => boolean, hx: number, hy: number, what = ''): Task {
+    yield* this.waitForLife();
     if (cond(Math.floor(this.px), Math.floor(this.py))) return;
+    let respawns = 0;
     for (let attempt = 0; attempt < 6; attempt++) {
       const sx = Math.floor(this.px), sy = Math.floor(this.py);
-      let path = findPath(this.g, sx, sy, (x, y) => cond(x, y), hx, hy);
+      const distance = Math.hypot(hx - sx, hy - sy);
+      const limit = Math.min(1000000, Math.max(120000, Math.ceil((distance + 32) ** 2 / 2)));
+      let path = findPath(this.g, sx, sy, (x, y) => cond(x, y), hx, hy, { limit });
       let chop = false;
-      if (!path) { path = findPath(this.g, sx, sy, (x, y) => cond(x, y), hx, hy, { allowDecor: true }); chop = true; }
+      if (!path) { path = findPath(this.g, sx, sy, (x, y) => cond(x, y), hx, hy, { allowDecor: true, limit }); chop = true; }
       if (!path) throw new BotError(`нет пути к ${what || hx + ',' + hy} от ${sx},${sy}`);
       let i = 1, stall = 0, lx = this.px, ly = this.py, ok = true;
+      const epoch = this.walkEpoch; let respawned = false;
       while (i < path.length) {
         const [tx, ty] = path[i];
         if (chop && this.g.world.decor(tx, ty)) { this.input.mx = this.input.my = 0; yield* this.handMineTile(tx, ty, 1); continue; }
@@ -95,10 +159,13 @@ export class Bot {
         this.input.mx = Math.abs(dx) > 0.05 ? Math.sign(dx) * Math.min(1, Math.abs(dx) * 4) : 0;
         this.input.my = Math.abs(dy) > 0.05 ? Math.sign(dy) * Math.min(1, Math.abs(dy) * 4) : 0;
         yield;
+        if (this.g.player.dead) yield* this.waitForLife();
+        if (epoch !== this.walkEpoch) { ok = false; respawned = true; break; }
         const mv = Math.hypot(this.px - lx, this.py - ly); this.walked += mv; lx = this.px; ly = this.py;
         if (mv < 0.01) { if (++stall > 40) { ok = false; break; } } else stall = 0;
       }
       this.input.mx = this.input.my = 0;
+      if (respawned) { if (++respawns > 3) throw new BotError('повторная гибель во время ходьбы', this.recoveryPoint); attempt--; continue; }
       if (ok && cond(Math.floor(this.px), Math.floor(this.py))) return;
       if (ok && i >= path.length) return;
       yield 2;
@@ -108,7 +175,8 @@ export class Bot {
   /** подойти на расстояние r к точке */
   *near(x: number, y: number, r = REACH - 0.5, what = ''): Task {
     if (this.dist(x, y) <= r) return;
-    yield* this.walk((tx, ty) => Math.hypot(tx + 0.5 - x, ty + 0.5 - y) <= r, x, y, what);
+    // Leave room for the walker's 0.25-tile arrival tolerance.
+    yield* this.walk((tx, ty) => Math.hypot(tx + 0.5 - x, ty + 0.5 - y) <= Math.max(0.1, r - 0.4), x, y, what);
   }
   *reach(e: { x: number; y: number; w: number; h: number; proto?: string }): Task { if (this.inReach(e)) return; const [cx, cy] = center(e); yield* this.near(cx, cy, REACH - 0.5, e.proto); }
   // ---------- действия игрока ----------
@@ -149,7 +217,9 @@ export class Bot {
   /** поставить в очередь ручного крафта (сколько получится) */
   craft(rid: string, n: number) { if (n > 0) this.cmd({ t: 'craft', recipe: rid, count: n }); }
   *craftWait(rid: string, n: number): Task {
-    const out = RECIPES[rid].out[0][0]; const target = this.has(out) + n * RECIPES[rid].out[0][1];
+    const firstOut = RECIPES[rid]?.out[0];
+    if (!firstOut) throw new BotError(`рецепт ${rid} не производит предметов`);
+    const [out, perCraft] = firstOut; const target = this.has(out) + n * perCraft;
     this.craft(rid, n); yield;
     yield* this.until(() => this.has(out) >= target || this.g.queue.length === 0, 60 * 60 * 30, 'крафт ' + rid, 5);
     if (this.has(out) < target) throw new BotError(`не хватило материалов на ${n} × ${rid} (есть ${this.has(out)}/${target})`);

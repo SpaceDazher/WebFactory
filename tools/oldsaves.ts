@@ -13,6 +13,7 @@
 // Ledger каждого файла считается по самому старому JSON и записывается в MANIFEST — tests/compat.test.ts сверяет с ним загрузку.
 import fs from 'fs';
 import zlib from 'zlib';
+import { resolveBotSavesDir } from './bot/saves-path';
 import { Game, newPlayer } from '../src/sim/game';
 import { serialize, deserialize } from '../src/sim/save';
 import { ledger } from '../src/sim/compat';
@@ -25,7 +26,7 @@ const pack = (o: any) => '0' + zlib.deflateSync(Buffer.from(JSON.stringify(o))).
 const unpack = (s: string) => JSON.parse(zlib.inflateSync(Buffer.from(s.trim().slice(1), 'base64')).toString());
 const clone = (o: any) => JSON.parse(JSON.stringify(o));
 const run = (g: Game, n: number) => { for (let i = 0; i < n; i++) g.step(); };
-const dir = process.argv[2] || '/data/botsaves';
+const dir = resolveBotSavesDir({ argument: process.argv[2], env: process.env.BOT_SAVES });
 const OUT = 'tests/saves';
 const cks = fs.readdirSync(dir).filter(f => f.endsWith('.z7save')).sort();
 if (!cks.length) { console.error('нет сохранений бота в ' + dir + ' — запустите BOT_SAVES=' + dir + ' npm run bot'); process.exit(1); }

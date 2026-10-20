@@ -1,0 +1,39 @@
+{
+  "original": "C:/Users/Daniil/Downloads/zavod7-v1.15.0-game.zip",
+  "version": "1.16.0-rc.7",
+  "checked": [
+    {
+      "name": "double-ore",
+      "archiveEntry": "mods/double-ore.zip",
+      "packageHash": "956f5f50eaed2b50",
+      "loaded": 1,
+      "saveHash": "fc92d35eb004f9be"
+    },
+    {
+      "name": "new-recipe",
+      "archiveEntry": "mods/new-recipe.zip",
+      "packageHash": "ddd846e69187c4aa",
+      "loaded": 1,
+      "saveHash": "e9efd134eb94951e"
+    },
+    {
+      "name": "new-building",
+      "archiveEntry": "mods/new-building.zip",
+      "packageHash": "82f8f18f1d034d39",
+      "loaded": 1,
+      "saveHash": "d5c82acd61378cb1"
+    },
+    {
+      "name": "auto-furnaces",
+      "archiveEntry": "mods/auto-furnaces.zip",
+      "packageHash": "a1b75a989a0c6c30",
+      "loaded": 1,
+      "saveHash": "7b4551e296ab9068"
+    }
+  ],
+  "combined": {
+    "loaded": 4,
+    "saveHash": "5f5b42e92f923efd"
+  },
+  "scope": "Actual four ZIP payloads from original 1.15 game archive; parse, registry apply, 120 simulation ticks, save/load hash individually and combined. Script execution is covered separately by required scripts.test, not claimed by this probe."
+}

@@ -9,5 +9,6 @@ export const RESOURCES: Record<string, ResourceDef> = {
   'coal': { id: 'coal', res: 3, richness: 1, size: 1 },
   'stone': { id: 'stone', res: 4, richness: 1, size: 1 },
   'crude-oil': { id: 'crude-oil', res: 5, richness: 1, size: 1 },
+  'uranium-ore': { id: 'uranium-ore', res: 6, richness: 1, size: 1 },
 };
 export const MAPGEN: Record<string, MapGenDef> = { default: { id: 'default', trees: 1, rocks: 1, richness: 1 } };

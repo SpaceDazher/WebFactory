@@ -2,37 +2,34 @@
 // создание игры → код ZVD-XXXX → вход по коду → лобби (имя, цвет, «Готов», «Начать») → общий мир с двумя персонажами;
 // движение клиента видно у хоста, чат (Enter), метка (Alt + ЛКМ), список игроков (Tab), пауза только у хоста (F9),
 // принудительный рассинхрон → отчёт и пересинхронизация, EN без кириллицы, выход клиента → хост видит отключение.
-// Запуск: node tests/e2e20.mjs [chromium|firefox|webkit] (без аргумента — все три; WebKit — из /data/pwold).
+// Запуск: node tests/e2e20.mjs [chromium|firefox|webkit] (без аргумента — все три; WebKit — из кеша Playwright).
+import { launchBrowser, selectedBrowser, appUrl, projectRoot } from './browser.mjs';
 import fs from 'fs';
 import { spawn, spawnSync } from 'child_process';
-const WK = { PW: '/data/pwold/node_modules/playwright/index.mjs', PLAYWRIGHT_BROWSERS_PATH: '/data/pwold/browsers', PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS: '1', PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: 'ubuntu20.04-x64' };
-const name = process.argv[2];
+const name = process.env.PW_BROWSER || process.argv[2];
 if (!name) {
   let bad = 0; const sum = [];
   for (const n of ['chromium', 'firefox', 'webkit']) {
-    if (n === 'webkit' && !fs.existsSync(WK.PW)) { console.log('\n=== webkit: пропущен (нет /data/pwold)'); continue; }
-    const r = spawnSync(process.execPath, [process.argv[1], n], { stdio: 'inherit', env: { ...process.env, ...(n === 'webkit' ? WK : {}) } });
+    const r = spawnSync(process.execPath, [process.argv[1], n], { stdio: 'inherit', env: process.env });
     sum.push(`${n}: ${r.status === 0 ? 'OK' : 'ПРОВАЛ'}`); if (r.status !== 0) bad++;
   }
   console.log('\n' + sum.join(' · ')); process.exit(bad ? 1 : 0);
 }
 const PORT = 8790 + ['chromium', 'firefox', 'webkit'].indexOf(name);
-const srv = spawn(process.execPath, ['/data/game/tools/signal-server.mjs', '--port', String(PORT), '--quiet'], { stdio: 'inherit' });
+const ROOT = projectRoot(import.meta.url);
+const srv = spawn(process.execPath, [ROOT + '/tools/signal-server.mjs', '--port', String(PORT), '--quiet'], { stdio: 'inherit' });
 await new Promise(r => setTimeout(r, 700));
-const pw = (await import(process.env.PW || 'playwright')).default;
 let fails = 0; const errs = [];
 const ok = (c, m) => { console.log((c ? '  ✔ ' : '  ✘ ') + m); if (!c) fails++; };
-const URL0 = 'file:///data/game/dist/index.html?gfx=low';
-const VER = JSON.parse(fs.readFileSync('/data/game/package.json', 'utf8')).version;
-fs.mkdirSync('/data/game/shots', { recursive: true });
-const opts = name === 'chromium' ? { executablePath: '/usr/local/bin/chromium', args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--use-gl=angle', '--disable-features=WebRtcHideLocalIpsWithMdns'] }
+const URL0 = appUrl(import.meta.url, '?gfx=low');
+const VER = JSON.parse(fs.readFileSync(ROOT + '/package.json', 'utf8')).version;
+fs.mkdirSync(ROOT + '/shots', { recursive: true });
+const opts = name === 'chromium' ? { args: ['--enable-unsafe-swiftshader', '--use-gl=angle', '--disable-features=WebRtcHideLocalIpsWithMdns'] }
   : name === 'firefox' ? { firefoxUserPrefs: { 'media.peerconnection.ice.obfuscate_host_addresses': false, 'media.navigator.permission.disabled': true } } : {};
 // у каждого игрока свой браузер (как у настоящих игроков): фоновые вкладки браузеры притормаживают
-const b = await pw[name].launch(opts), b2 = await pw[name].launch(opts);
+const b = await launchBrowser(name, opts), b2 = await launchBrowser(name, opts);
 console.log(`\n=== ${name} ${b.version()} (игра ${VER}, сигналинг :${PORT})`);
-// WebKit сообщает об ошибке отправки в закрывающийся DataChannel как об ошибке страницы, хотя исключение перехвачено (src/net/rtc.ts)
-const KNOWN = /Error sending string through RTCDataChannel/;
-const watch = (p, who) => { p.on('pageerror', e => { if (!(name === 'webkit' && KNOWN.test(e.message))) errs.push(who + ' PAGEERROR ' + e.message); }); p.on('console', m => { if (m.type() === 'error' && !/WebSocket|ERR_CONNECTION|ICE|stun/i.test(m.text())) errs.push(who + ' CONSOLE ' + m.text().slice(0, 300)); }); };
+const watch = (p, who) => { p.on('pageerror', e => errs.push(who + ' PAGEERROR ' + e.message)); p.on('console', m => { if (m.type() === 'error' && !/WebSocket|ERR_CONNECTION|ICE|stun/i.test(m.text())) errs.push(who + ' CONSOLE ' + m.text().slice(0, 300)); }); };
 const ready = async p => { await p.waitForFunction(() => window.__texMs != null && window.__zavod && (!window.__zavod.sim || window.__zavod.sim.snaps > 2), null, { timeout: 300000 }); await p.waitForTimeout(300); };
 const SPEECH = () => { window.SpeechSynthesisUtterance = class { constructor(t) { this.text = t; } }; Object.defineProperty(window, 'speechSynthesis', { value: { speaking: false, pending: false, getVoices: () => [], addEventListener() {}, removeEventListener() {}, speak() {}, cancel() {} }, configurable: true }); };
 const CYR = /[А-Яа-яЁё]/;
@@ -54,7 +51,7 @@ try {
 
   console.log('1. Хост: Esc → «Совместная игра» → новая карта → «Создать игру» → код ZVD-XXXX');
   await h.evaluate(() => window.__zavod.ui.toggle('menu')); await h.waitForTimeout(300);
-  ok(await down(h, '[data-act="mpopen"]'), 'в меню есть кнопка «Совместная игра»'); await h.waitForTimeout(300);
+  ok(await down(h, '[data-act="menu-child"][data-win="mp"]'), 'в меню есть кнопка «Совместная игра»'); await h.waitForTimeout(300);
   let t = await winText(h); ok(/Совместная игра/.test(t) && /Создать игру/.test(t) && /Войти в игру друга/.test(t), 'окно: «Создать игру», «Войти в игру друга»');
   await h.fill('#mpname', 'Anna'); await h.selectOption('#mpmap', 'new'); await h.fill('#mpseed', '4242'); await h.selectOption('#mpen', 'none');
   await down(h, '[data-act="mpcolor"][data-c]:nth-of-type(3)');
@@ -65,7 +62,7 @@ try {
   ok(t.includes(code) && /лобби/.test(t) && /Anna/.test(t), `лобби хоста: код ${code}, игрок Anna${t.includes(code) && /Anna/.test(t) ? '' : ' — ' + t.slice(0, 200).replace(/\n/g, ' | ')}`);
 
   console.log('2. Клиент: вход по коду, «Готов»; хост: «Начать»');
-  await c.evaluate(() => window.__zavod.ui.toggle('menu')); await c.waitForTimeout(200); await down(c, '[data-act="mpopen"]'); await c.waitForTimeout(300);
+  await c.evaluate(() => window.__zavod.ui.toggle('menu')); await c.waitForTimeout(200); await down(c, '[data-act="menu-child"][data-win="mp"]'); await c.waitForTimeout(300);
   await c.fill('#mpname', 'Boris'); await c.fill('#mpcode', code.toLowerCase()); await down(c, '[data-act="mpjoin"]');
   ok(await until(c, () => { const s = window.__zavod.mp.session; return s && s.players.length === 2 && s.me === 1; }, null, 30000), 'клиент в лобби: двое, его номер 2');
   ok(await until(h, () => window.__zavod.mp.session.players.length === 2, null, 10000), 'хост видит второго игрока');
@@ -107,8 +104,21 @@ try {
   ok(/Игроки/.test(t) && /Anna/.test(t) && /Boris/.test(t) && /Задержка ввода: \d+ тиков/.test(t) && /Рассинхронов: 0/.test(t), 'Tab: игроки, пинг, задержка ввода, рассинхронов 0');
   const delay = await c.evaluate(() => window.__zavod.game.mpv.mp.delay); ok(delay >= 2 && delay <= 12, `задержка ввода ${delay} тиков (≈ ${Math.round(delay * 1000 / 60)} мс)`);
   await c.keyboard.press('Tab'); await c.waitForTimeout(200);
-  await c.keyboard.press('F9'); await c.waitForTimeout(400);
-  ok(/только хост/.test(await toast(c)) && !(await c.evaluate(() => window.__zavod.mp.session.paused)), 'F9 у клиента: «Паузу ставит только хост»');
+  await c.evaluate(() => { window.__e2e20CanvasPointer = null; window.addEventListener('pointerdown', ev => {
+    window.__e2e20CanvasPointer = { target: ev.target instanceof HTMLElement ? ev.target.id : '', trusted: ev.isTrusted };
+  }, { once: true, capture: true }); });
+  const canvasPoint = await c.locator('#game').evaluate(cv => ({ x: cv.clientWidth * 0.75, y: cv.clientHeight * 0.5 }));
+  await c.locator('#game').click({ position: canvasPoint });
+  const keyContext = await c.evaluate(() => ({ uiOpen: window.__zavod.ui.open,
+    active: document.activeElement && { tag: document.activeElement.tagName, id: document.activeElement.id }, pointer: window.__e2e20CanvasPointer }));
+  ok(keyContext.pointer?.trusted && keyContext.pointer.target === 'game' && keyContext.uiOpen === null &&
+    !['INPUT', 'TEXTAREA'].includes(keyContext.active?.tag), `game canvas clicked; global key context has no open UI/input (${JSON.stringify(keyContext)})`);
+  await c.keyboard.press('F9');
+  const deniedPause = await until(c, () => /только хост/.test(document.getElementById('toast').innerText) && !window.__zavod.mp.session.paused, null, 3000);
+  console.log('F9_CLIENT_DIAGNOSTIC', JSON.stringify(await c.evaluate(() => ({ uiOpen: window.__zavod.ui.open,
+    active: document.activeElement && { tag: document.activeElement.tagName, id: document.activeElement.id }, paused: window.__zavod.mp.session.paused,
+    messages: window.__zavod.game.messages.slice(-5).map(m => ({ text: m.text, tick: m.tick })), toast: document.getElementById('toast').innerText }))));
+  ok(deniedPause, 'F9 у клиента: «Паузу ставит только хост»');
   await h.keyboard.press('F9');
   ok(await until(c, () => window.__zavod.mp.session.paused, null, 5000), 'F9 у хоста — пауза у всех');
   await c.waitForTimeout(600); const p1 = await W(c, 'return g.tick'); await c.waitForTimeout(800); const p2 = await W(c, 'return g.tick');

@@ -9,7 +9,8 @@ import { ITEMS } from '../data/items';
 export type ModKind = 'none' | 'speed' | 'prod' | 'eff';
 export interface CalcOpts {
   /** сборщик для «crafting»: 1, 2, 3 (для рецептов с жидкостью — не ниже 2) */
-  asm: 1 | 2 | 3;
+  asm: 1 | 2 | 3 | 4;
+  /** v1.16: уровень электробура (1–3) */ drill?: 1 | 2 | 3;
   furnace: 'stone-furnace' | 'steel-furnace' | 'electric-furnace';
   /** модули во все слоты машин: вид и уровень; продуктивность — только где разрешена (иначе слоты пустые) */
   mods: ModKind; modTier: 1 | 2 | 3;
@@ -34,12 +35,16 @@ export interface CalcResult { item: string; perMin: number; steps: CalcStep[]; r
 
 const RAW = new Set(['iron-ore', 'copper-ore', 'coal', 'stone', 'crude-oil', 'water', 'uranium-ore', 'wood']);
 const PREFER: Record<string, string> = { 'petroleum-gas': 'advanced-oil-processing', 'light-oil': 'advanced-oil-processing', 'heavy-oil': 'advanced-oil-processing' };
+/** v1.16: чистый результат цикла обогащения (оборотные 40 U-235 возвращаются): −3 U-238 → +1 U-235, без бесконечной рекурсии в калькуляторе */
+const ENRICH_NET: RecipeDef = { ...RECIPES['uranium-enrichment'], id: 'uranium-enrichment', in: [['uranium-238', 3]], out: [['uranium-235', 1]] };
 /** рецепт для предмета: основной продукт, без ручных особых рецептов; null — сырьё */
 export function recipeFor(item: string): RecipeDef | null {
   if (RAW.has(item)) return null;
+  if (item === 'uranium-235') return ENRICH_NET;
   if (PREFER[item] && RECIPES[PREFER[item]]) return RECIPES[PREFER[item]];
   let best: RecipeDef | null = null;
   for (const r of Object.values(RECIPES)) {
+    if (!r.out.length) continue;
     const i = r.out.findIndex(o => o[0] === item); if (i < 0) continue;
     if (r.cat === 'rocket' && item !== 'rocket-part') continue;
     if (!best || (i === 0 && best.out[0][0] !== item)) best = r;
@@ -52,8 +57,10 @@ export function machineFor(r: RecipeDef, o: CalcOpts): string {
     case 'chemistry': return 'chemical-plant';
     case 'refining': return 'oil-refinery';
     case 'rocket': return 'rocket-silo';
-    case 'crafting-with-fluid': return o.asm === 3 ? 'assembling-machine-3' : 'assembling-machine-2';
-    default: return `assembling-machine-${o.asm}`;
+    case 'centrifuging': return 'centrifuge';
+    case 'bioprocessing': return 'bio-extractor';
+    case 'crafting-with-fluid': return o.asm === 4 ? 'assembling-machine-4' : o.asm === 3 ? 'assembling-machine-3' : 'assembling-machine-2';
+    default: return `assembling-machine-${Math.max(o.asm, r.minTier || 1)}`; // v1.16: рецепт может требовать сборщик не ниже уровня
   }
 }
 const modId = (k: ModKind, t: number) => k === 'none' ? null : (k === 'speed' ? 'speed-module' : k === 'prod' ? 'productivity-module' : 'effectivity-module') + (t > 1 ? '-' + t : '');
@@ -88,7 +95,7 @@ export function calculate(item: string, perMin: number, opts: Partial<CalcOpts> 
     const machine = machineFor(r, o); const P = PROTOS[machine];
     const fx = machineFx(machine, r.id, o);
     const cycleTicks = Math.max(1, Math.ceil(r.time * 60 / ((P.speed || 1) * fx.speedMul) - 1e-9));
-    const outN = r.out.find(x => x[0] === it)![1];
+    const outN = r.rout ? (r.rout.find(x => x[0] === it)?.[1] ?? 0) / r.rout.reduce((q, x) => q + x[1], 0) * (r.out[0][1]) : r.out.find(x => x[0] === it)![1]; // случайный выход — ожидание
     const perMachine = 3600 / cycleTicks * outN * (1 + fx.prod);
     const machines = rate / perMachine, crafts = rate / (outN * (1 + fx.prod)); // крафтов в минуту
     const inputs: [string, number][] = r.in.map(([x, n]) => [x, crafts * n]);
@@ -101,16 +108,17 @@ export function calculate(item: string, perMin: number, opts: Partial<CalcOpts> 
     order.push(it);
   }
   for (const s of res.steps) { res.kW += s.kW; res.burnerKW += s.burnerKW; if (s.machine) { res.machines[s.machine] = (res.machines[s.machine] || 0) + s.count; res.beacons += s.count * s.beacons; } }
+  if (res.raw['uranium-ore']) { res.raw['sulfuric-acid'] = res.raw['uranium-ore']; res.notes.push('Урановая руда: 1 ед. серной кислоты на единицу руды; в расчёте U-235 берётся из цикла обогащения (+1 U-235 за −3 U-238, оборотный запас 40 U-235 нужен один раз)'); }
   if (o.mods === 'prod' && res.steps.some(s => s.recipe && !prodAllowed(s.recipe))) res.notes.push('Модули продуктивности ставятся только в машины с промежуточными деталями — в остальных слоты пустые');
   if (o.beacons > 0) res.notes.push('Маяки посчитаны отдельно на каждую машину (без общих маяков между соседями)');
   if (res.steps.some(s => s.byproducts.length)) res.notes.push('Есть попутные продукты — их нужно потреблять или копить, иначе машины встанут');
   return res;
 }
 function drillStep(it: string, rate: number, o: CalcOpts, d: number): CalcStep {
-  const P = PROTOS['electric-mining-drill']; const fx = machineFx('electric-mining-drill', null, o, true);
+  const did = o.drill && o.drill > 1 ? `electric-mining-drill-${o.drill}` : 'electric-mining-drill'; const P = PROTOS[did]; const fx = machineFx(did, null, o, true);
   const perMachine = (P.speed || 0.5) * fx.speedMul * (1 + fx.prod + (o.mining || 0)) * 60;
   const machines = rate / perMachine;
-  return { item: it, perMin: rate, recipe: null, machine: 'electric-mining-drill', machines, count: Math.ceil(machines - 1e-9), perMachine, cycleTicks: 0, speedMul: fx.speedMul, prod: fx.prod + (o.mining || 0),
+  return { item: it, perMin: rate, recipe: null, machine: did, machines, count: Math.ceil(machines - 1e-9), perMachine, cycleTicks: 0, speedMul: fx.speedMul, prod: fx.prod + (o.mining || 0),
     kW: machines * P.energy!.kW * fx.energyMul + machines * fx.beacons * PROTOS['beacon'].energy!.kW, burnerKW: 0, beacons: fx.beacons, inputs: [], byproducts: [], depth: d, raw: true };
 }
 /** текст расчёта для заметки на карте */
@@ -124,3 +132,13 @@ export function calcText(r: CalcResult, name: (id: string) => string, tr: (s: st
 }
 export const fmtN = (v: number, d = 1) => (Math.abs(v) >= 100 ? Math.round(v).toString() : v.toFixed(d)).replace('.', ',');
 export const fmtKW = (kW: number) => kW >= 1000 ? (kW / 1000).toFixed(2).replace('.', ',') + ' МВт' : Math.round(kW) + ' кВт';
+
+/** v1.16: расчёт тепловой станции из реакторов сеткой cols×rows (соседи — по общей стороне): тепло, теплообменники, турбины, вода, насосы, стержни */
+export interface EnergyPlan { cols: number; rows: number; reactors: number; mw: number; exchangers: number; turbines: number; water: number; pumps: number; rodsPerMin: number; elecMW: number; }
+export const HEX_MW = 10, TURBINE_MW = 5.82, STEAM_KJ = 97, PUMP_PER_S = 1200, ROD_SECONDS = 200;
+export function energyPlan(cols: number, rows: number): EnergyPlan {
+  cols = Math.max(1, Math.min(10, Math.floor(cols) || 1)); rows = Math.max(1, Math.min(10, Math.floor(rows) || 1));
+  let mw = 0; for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) { const n = (x > 0 ? 1 : 0) + (x < cols - 1 ? 1 : 0) + (y > 0 ? 1 : 0) + (y < rows - 1 ? 1 : 0); mw += 40 * (1 + n); }
+  const water = mw * 1000 / STEAM_KJ;
+  return { cols, rows, reactors: cols * rows, mw, exchangers: Math.ceil(mw / HEX_MW - 1e-9), turbines: Math.ceil(mw / TURBINE_MW - 1e-9), water: Math.round(water * 1000) / 1000, pumps: Math.ceil(water / PUMP_PER_S - 1e-9), rodsPerMin: cols * rows * 60 / ROD_SECONDS, elecMW: mw };
+}

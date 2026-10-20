@@ -1,6 +1,8 @@
 // v1.1: сводка статистики игроков (tools/statslib.ts), телеметрия v2 (сессии, ошибки), миграция сохранений v3 → v4, переводы новых строк.
 import fs from 'fs';
 import zlib from 'zlib';
+import os from 'node:os';
+import path from 'node:path';
 import { load, summarize, kmMedian, classifyGpu, parseBug, balanceAdvice, dist, markdown, PLAN, STAGES } from '../tools/statslib';
 import { serialize, deserialize, stateHash, migrate, SAVE_VERSION } from '../src/sim/save';
 import { teleReport } from '../src/sim/telemetry';
@@ -71,18 +73,19 @@ ok(Number.isNaN(kmMedian([{ t: 5, done: true }, { t: 6, done: false }, { t: 7, d
   ok(fast.status === 'fast' && fast.edits.map(e => e.stage).join() === '0,1,3' && fast.edits.every(e => e.factor > 1 && e.factor <= 2), 'быстрее 15 ч: дорожают этапы, обгоняющие план > 30%, не больше ×2');
 }
 {
-  const fake = '/tmp/zavod7-stats-test'; fs.rmSync(fake, { recursive: true, force: true });
+  const fake = fs.mkdtempSync(path.join(os.tmpdir(), 'zavod7-stats-test-'));
   const { spawnSync } = await import('child_process');
   const r = spawnSync(process.execPath, ['--import', 'tsx', 'tools/fake-players.ts', fake, '--n', '24', '--seed', '7'], { encoding: 'utf8' });
   ok(r.status === 0 && fs.readdirSync(fake).length >= 24, `синтетические игроки: ${fs.readdirSync(fake).length} файлов`);
-  const files = fs.readdirSync(fake).map(f => ({ name: f, text: fs.readFileSync(fake + '/' + f, 'utf8') }));
+  const files = fs.readdirSync(fake).map(f => ({ name: f, text: fs.readFileSync(path.join(fake, f), 'utf8') }));
   const s = summarize(load(files));
   ok(s.synthetic === s.players + s.benches.length && s.players > 0, `все помечены как синтетические (${s.synthetic})`);
   const md = markdown(s);
   ok(/СИНТЕТИЧ/i.test(md) && /Готово, когда|вердикт/i.test(md), 'в сводке — предупреждение о синтетике и таблица вердиктов');
   ok(s.finished > 0 && Number.isFinite(s.rocket.med) && s.rocketKM >= s.rocket.med, `медиана до ракеты среди дошедших ${(s.rocket.med / 60).toFixed(1)} ч ≤ с учётом бросивших (КМ) ${(s.rocketKM / 60).toFixed(1)} ч`);
-  const r2 = spawnSync(process.execPath, ['--import', 'tsx', 'tools/stats-report.ts', fake, '--json', fake + '.json', '--out', fake + '.md'], { encoding: 'utf8' });
-  ok(r2.status === 0 && JSON.parse(fs.readFileSync(fake + '.json', 'utf8')).players === s.players && fs.readFileSync(fake + '.md', 'utf8') === md, 'tools/stats-report.ts --json работает и совпадает с библиотекой');
+  const jsonReport = path.join(fake, 'stats-report.json'), markdownReport = path.join(fake, 'stats-report.md');
+  const r2 = spawnSync(process.execPath, ['--import', 'tsx', 'tools/stats-report.ts', fake, '--json', jsonReport, '--out', markdownReport], { encoding: 'utf8' });
+  ok(r2.status === 0 && JSON.parse(fs.readFileSync(jsonReport, 'utf8')).players === s.players && fs.readFileSync(markdownReport, 'utf8') === md, 'tools/stats-report.ts --json работает и совпадает с библиотекой');
 }
 
 console.log('3. Телеметрия v2 и сохранения v4');

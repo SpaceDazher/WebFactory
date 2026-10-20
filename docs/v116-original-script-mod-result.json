@@ -1,0 +1,19 @@
+{
+  "original": "C:/Users/Daniil/Downloads/zavod7-v1.15.0-game.zip",
+  "entry": "mods/auto-furnaces.zip/control.js",
+  "version": "1.16.0-rc.7",
+  "method": "Original archive control.js is byte-identical to the current example; execute the existing scripts.test.ts on that exact code through its normal tsx entry point.",
+  "sameBytes": true,
+  "bytes": 3570,
+  "sha256": "4743189383d40c3ab5937aaa25897be21674647fb76afeebcd8c7f40b26f3c1d",
+  "identityLog": "integration-logs/parent-original-script-identity.log",
+  "runtimeCommand": "npm.cmd exec -- tsx tests/scripts.test.ts",
+  "runtimeExit": 0,
+  "runtimeLog": "integration-logs/parent-original-scripts-stock.log",
+  "coverage": "Real Worker sandbox, inventory-consuming auto-furnace placement, script storage/UI toggle, deterministic save/reload, sandbox boundaries and resource limits.",
+  "unsuccessfulExploratoryRuns": [
+    "integration-logs/parent-original-script-mod.log: inline module import initialization error, exit 1",
+    "integration-logs/parent-original-script-mod-green.log: inline module Worker failed to start, exit 1 despite historical filename"
+  ],
+  "limitations": "The successful runtime check uses byte-identical current example files, not a second direct invocation of the archive package. Original package registry/save/hash compatibility was separately verified. No original archive was modified."
+}

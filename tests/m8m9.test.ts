@@ -1,6 +1,7 @@
 // Тесты M8–M9: модули и маяки, аккумуляторы, жидкостные рецепты, ракетная шахта, чертежи,
 // призраки, быстрая замена, снос, улучшение, отмена, бесконечные исследования, сохранения v3.
 import { Game } from '../src/sim/game';
+import { asleep, beltInsert } from '../src/sim/belts';
 import { serialize, deserialize, stateHash, migrate, SAVE_VERSION } from '../src/sim/save';
 import { makeBlueprint, rotateBp, flipBp, bpCost } from '../src/sim/blueprint';
 import { packStr, unpackStr } from '../src/core/pack';
@@ -173,11 +174,31 @@ console.log('7. Быстрая замена, планировщики сноса
   g.player.x = A.x + 4; g.player.y = A.y + 6;
   for (let i = 0; i < 6; i++) g.build('transport-belt', A.x + i, A.y, 1, false);
   const b0 = g.entAt(A.x + 2, A.y)!; b0.lanes![0][0].push({ item: 'iron-plate', pos: 100, n: 1 });
+  run(g, 1 / 60); // warm the yellow-belt speed cache before the in-place upgrade
+  const beforeUpgrade = b0.lanes![0][0][0].pos;
   g.inv.add('fast-transport-belt', 1);
   g.enqueue({ t: 'build', proto: 'fast-transport-belt', x: A.x + 2, y: A.y, dir: 1 }); g.step();
   const b1 = g.entAt(A.x + 2, A.y)!;
   ok(b1 === b0 && b1.proto === 'fast-transport-belt' && b1.lanes![0][0].length === 1, 'конвейер заменён, предмет остался');
+  ok(b1.lanes![0][0][0].pos - beforeUpgrade === 16,
+    'upgraded belt uses red speed immediately after cached yellow speed (' + (b1.lanes![0][0][0].pos - beforeUpgrade) + ' units)');
   ok(g.inv.count('transport-belt') === 1, 'старый конвейер вернулся в инвентарь');
+  const beforeDowngrade = b1.lanes![0][0][0].pos;
+  g.inv.add('transport-belt', 1);
+  g.enqueue({ t: 'build', proto: 'transport-belt', x: A.x + 2, y: A.y, dir: 1 }); g.step();
+  const b2 = g.entAt(A.x + 2, A.y)!;
+  ok(b2 === b0 && b2.proto === 'transport-belt' && b2.lanes![0][0][0].pos - beforeDowngrade === 8,
+    'downgraded belt uses yellow speed immediately after cached red speed (' + (b2.lanes![0][0][0].pos - beforeDowngrade) + ' units)');
+  b2.lanes![0][0].length = 0;
+  run(g, 1 / 60);
+  const sleptWithYellowCache = asleep(g, b2);
+  g.inv.add('fast-transport-belt', 1);
+  g.enqueue({ t: 'build', proto: 'fast-transport-belt', x: A.x + 2, y: A.y, dir: 1 }); g.step();
+  const wokeWithRedCache = b2._spd === 16;
+  const insertedOnWakingBelt = beltInsert(b2, 0, 0, 'iron-plate', 1, g);
+  g.step();
+  ok(sleptWithYellowCache && wokeWithRedCache && insertedOnWakingBelt && b2.lanes![0][0][0]?.pos === 144,
+    'upgrading a sleeping belt invalidates cached speed before its next insertion');
   const as = g.build('assembling-machine-1', A.x, A.y + 2, 0, false)!;
   g.enqueue({ t: 'setRecipe', id: as.id, recipe: 'copper-cable' }); g.step();
   g.enqueue({ t: 'upgrade', x0: A.x, y0: A.y, x1: A.x + 6, y1: A.y + 5, map: { 'transport-belt': 'fast-transport-belt', 'assembling-machine-1': 'assembling-machine-2' } }); g.step();

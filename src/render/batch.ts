@@ -88,7 +88,12 @@ export class GLBatch implements Batch {
   /** программная реализация (SwiftShader, llvmpipe): WebGL есть, но рисует процессор — Canvas2D-атлас тогда быстрее */
   static isSoftware(gl: WebGL2RenderingContext) { const ext = gl.getExtension('WEBGL_debug_renderer_info'); const r = String(ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)); return /swiftshader|llvmpipe|software|softpipe|basic render/i.test(r); }
   static create(cv: HTMLCanvasElement): GLBatch | null {
-    try { const gl = cv.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false, preserveDrawingBuffer: false }); return gl ? new GLBatch(gl) : null; } catch { return null; }
+    let gl: WebGL2RenderingContext | null = null;
+    try { gl = cv.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' }); return gl ? new GLBatch(gl) : null; }
+    catch {
+      try { if (gl && !gl.isContextLost()) gl.getExtension('WEBGL_lose_context')?.loseContext(); } catch { /* ошибка при очистке не должна скрывать сбой создания */ }
+      return null;
+    }
   }
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;

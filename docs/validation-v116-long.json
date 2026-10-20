@@ -1,0 +1,304 @@
+{
+  "startedAt": "2026-10-13T08:07:38.101Z",
+  "fullAcceptance": true,
+  "definition": {
+    "ticksPerGameHour": 216000,
+    "warmupTicks": 36000,
+    "measuredTicks": 2160000,
+    "economyProfile": "0/120/480MW in 600-second blocks, repeated to exactly 10 game hours",
+    "thresholdKW": 470400,
+    "waterSupply": "Each of four HX water networks is connected to two built offshore pumps adjacent to shallow-water initial terrain fixtures. No fluid amount is written after pump construction.",
+    "continuousComparison": "same 2x2 economy blueprint, same economy-policy 480MW warmup and initial physical reserves; from the first measured tick onward the counterfactual holds fuel permission open and independently emergency-stops at 900°C/rearms below 800°C; accident logic remains active",
+    "normalization": "After measured profiles, both runs first finish or physically stop active rods under the same 480MW load bank with new fuel disabled. The lower resulting physical reserve defines the shared endpoint; only the higher reserve is physically discharged with Game.step and the same load bank. Endpoints are sampled every tick; 8.1MJ covers one 8MJ full-load tick plus the ≤0.04MJ modeled loss bound. No heat/fluid values are assigned."
+  },
+  "normalizationToleranceJ": 8100000,
+  "endurance": {
+    "requestedTicks": 2160000,
+    "actualTicks": 2160000,
+    "elapsedSeconds": 218.5146866,
+    "minKW": 479056.319999999,
+    "averageKW": 479153.786570721,
+    "aboveThresholdFraction": 1,
+    "integratedOutputJ": 17249536316982.092,
+    "generatedHeatJ": 17280000000846.873,
+    "steamTransferredJ": 17249530350568,
+    "pipeAndAccidentLossJ": 33969235976,
+    "unreleasedFuelPotentialJ": 0,
+    "energyStart": {
+      "heatJ": 97511560644,
+      "steamJ": 13950733.333118886,
+      "accumJ": 0,
+      "totalJ": 97525511377.33311
+    },
+    "energyEnd": {
+      "heatJ": 94011974100,
+      "steamJ": 7984320.000000001,
+      "accumJ": 0,
+      "totalJ": 94019958420
+    },
+    "storedDeltaJ": -3505552957.3331146,
+    "energyBalanceErrorJ": 846.873046875,
+    "maxReactorC": 597.6568834,
+    "boomDelta": 0,
+    "zonesCreated": 0,
+    "burnedCells": 720,
+    "stoppedCells": 0,
+    "fedCells": 728,
+    "inputCellsRemaining": 8,
+    "activeCellsRemaining": 0,
+    "spentCellsCollected": 720,
+    "fuelLedgerError": 0,
+    "removedReactors": 0,
+    "heatPipeCount": 92,
+    "offshorePumpCount": 8,
+    "emergencyStopEvents": 0,
+    "demandSatisfaction": {
+      "480": {
+        "ticks": 2160000,
+        "satisfiedTicks": 2160000,
+        "average": 0.9982297542144454
+      }
+    }
+  },
+  "economy": {
+    "requestedTicks": 2160000,
+    "actualTicks": 2160000,
+    "elapsedSeconds": 202.2335103,
+    "minKW": 7.199999999999991,
+    "averageKW": 200007.33123425412,
+    "aboveThresholdFraction": 0.3333333333333333,
+    "integratedOutputJ": 7200263924160,
+    "generatedHeatJ": 7254728000090.947,
+    "steamTransferredJ": 7224217842756,
+    "pipeAndAccidentLossJ": 34051552296,
+    "unreleasedFuelPotentialJ": 0,
+    "energyStart": {
+      "heatJ": 97479755340,
+      "steamJ": 11550800.000323221,
+      "accumJ": 0,
+      "totalJ": 97491306140.00032
+    },
+    "energyEnd": {
+      "heatJ": 93938360288,
+      "steamJ": 23965469380.950474,
+      "accumJ": 0,
+      "totalJ": 117903829668.95047
+    },
+    "storedDeltaJ": 20412523528.95015,
+    "energyBalanceErrorJ": 90.947265625,
+    "maxReactorC": 667.9069559,
+    "boomDelta": 0,
+    "zonesCreated": 0,
+    "burnedCells": 304,
+    "stoppedCells": 0,
+    "fedCells": 316,
+    "inputCellsRemaining": 8,
+    "activeCellsRemaining": 4,
+    "spentCellsCollected": 304,
+    "fuelLedgerError": 0,
+    "removedReactors": 0,
+    "heatPipeCount": 92,
+    "offshorePumpCount": 8,
+    "emergencyStopEvents": 0,
+    "demandSatisfaction": {
+      "0": {
+        "ticks": 720000,
+        "satisfiedTicks": 0,
+        "average": 1
+      },
+      "120": {
+        "ticks": 720000,
+        "satisfiedTicks": 720000,
+        "average": 1
+      },
+      "480": {
+        "ticks": 720000,
+        "satisfiedTicks": 720000,
+        "average": 1
+      }
+    }
+  },
+  "continuouslyEnabledCounterfactual": {
+    "requestedTicks": 2160000,
+    "actualTicks": 2160000,
+    "elapsedSeconds": 182.4637439,
+    "minKW": 7.199999999999991,
+    "averageKW": 200007.54706752903,
+    "aboveThresholdFraction": 0.3333333333333333,
+    "integratedOutputJ": 7200271694160,
+    "generatedHeatJ": 7341544000069.752,
+    "steamTransferredJ": 7246004911364,
+    "pipeAndAccidentLossJ": 53611465032,
+    "unreleasedFuelPotentialJ": 11880352000000,
+    "energyStart": {
+      "heatJ": 97479755340,
+      "steamJ": 11550800.000323221,
+      "accumJ": 0,
+      "totalJ": 97491306140.00032
+    },
+    "energyEnd": {
+      "heatJ": 139407378944,
+      "steamJ": 45744767999.19006,
+      "accumJ": 0,
+      "totalJ": 185152146943.19006
+    },
+    "storedDeltaJ": 87660840803.18974,
+    "energyBalanceErrorJ": 69.751953125,
+    "maxReactorC": 900.0428819,
+    "boomDelta": 0,
+    "zonesCreated": 0,
+    "burnedCells": 8,
+    "stoppedCells": 796,
+    "fedCells": 816,
+    "inputCellsRemaining": 8,
+    "activeCellsRemaining": 4,
+    "spentCellsCollected": 804,
+    "fuelLedgerError": 0,
+    "removedReactors": 0,
+    "heatPipeCount": 92,
+    "offshorePumpCount": 8,
+    "emergencyStopEvents": 796,
+    "demandSatisfaction": {
+      "0": {
+        "ticks": 720000,
+        "satisfiedTicks": 0,
+        "average": 1
+      },
+      "120": {
+        "ticks": 720000,
+        "satisfiedTicks": 720000,
+        "average": 1
+      },
+      "480": {
+        "ticks": 720000,
+        "satisfiedTicks": 720000,
+        "average": 1
+      }
+    }
+  },
+  "physicalReserveNormalization": {
+    "targetStoredJ": 117822185500.92065,
+    "toleranceJ": 8100000,
+    "sharedLoadBankKW": 480000,
+    "actualTicks": 22800,
+    "ticksByScenario": [
+      5163,
+      17637
+    ],
+    "elapsedSeconds": 1.5,
+    "result": [
+      {
+        "label": "economy",
+        "actualTicks": 5163,
+        "elapsedSeconds": 1.5,
+        "loadBankKW": 480000,
+        "targetStoredJ": 117822185500.92065,
+        "terminalEnergy": {
+          "heatJ": 94009248880,
+          "steamJ": 23812936620.92066,
+          "accumJ": 0,
+          "totalJ": 117822185500.92065
+        },
+        "initialEnergy": {
+          "heatJ": 93938360288,
+          "steamJ": 23965469380.950474,
+          "accumJ": 0,
+          "totalJ": 117903829668.95047
+        },
+        "energyEnd": {
+          "heatJ": 94009248880,
+          "steamJ": 23812936620.92066,
+          "accumJ": 0,
+          "totalJ": 117822185500.92065
+        },
+        "storedDeltaJ": -81644168.02981567,
+        "generatedHeatJ": 41303999989.916016,
+        "steamTransferredJ": 41152086800,
+        "physicalHeatLossJ": 81024608,
+        "unreleasedFuelPotentialJ": 0,
+        "thermalBalanceErrorJ": -10.083984375,
+        "burnedCells": 4,
+        "stoppedCells": 0,
+        "consumedCells": 4,
+        "totalConsumedCellsIncludingWarmupAndMeasurement": 316,
+        "totalSpentFuelStock": 316,
+        "spentFuelLedgerError": 0,
+        "inputCellsRemaining": 8,
+        "activeCellsRemaining": 0,
+        "fuelLedgerError": 0,
+        "boomDelta": 0,
+        "zonesCreated": 0,
+        "emergencyStopEvents": 0,
+        "maxReactorC": 578.1381563,
+        "targetReached": true
+      },
+      {
+        "label": "continuously-enabled-counterfactual",
+        "actualTicks": 17637,
+        "elapsedSeconds": 1.5,
+        "loadBankKW": 480000,
+        "targetStoredJ": 117822185500.92065,
+        "terminalEnergy": {
+          "heatJ": 139190423312,
+          "steamJ": 45743655959.78723,
+          "accumJ": 0,
+          "totalJ": 184934079271.78723
+        },
+        "initialEnergy": {
+          "heatJ": 139407378944,
+          "steamJ": 45744767999.19006,
+          "accumJ": 0,
+          "totalJ": 185152146943.19006
+        },
+        "energyEnd": {
+          "heatJ": 87280260436,
+          "steamJ": 30540229120.30143,
+          "accumJ": 0,
+          "totalJ": 117820489556.30142
+        },
+        "storedDeltaJ": -67331657386.88864,
+        "generatedHeatJ": 74135999981.90039,
+        "steamTransferredJ": 125893639720,
+        "physicalHeatLossJ": 369478788,
+        "unreleasedFuelPotentialJ": 0,
+        "thermalBalanceErrorJ": -18.099609375,
+        "burnedCells": 4,
+        "stoppedCells": 0,
+        "consumedCells": 4,
+        "totalConsumedCellsIncludingWarmupAndMeasurement": 816,
+        "totalSpentFuelStock": 816,
+        "spentFuelLedgerError": 0,
+        "inputCellsRemaining": 8,
+        "activeCellsRemaining": 0,
+        "fuelLedgerError": 0,
+        "boomDelta": 0,
+        "zonesCreated": 0,
+        "emergencyStopEvents": 0,
+        "maxReactorC": 830.3934642,
+        "targetReached": true
+      }
+    ]
+  },
+  "rodComparison": {
+    "economyWarmConsumedCells": 8,
+    "counterfactualWarmConsumedCells": 8,
+    "economyBurnedCells": 304,
+    "economyStoppedCells": 0,
+    "economyConsumedCells": 304,
+    "continuouslyEnabledBurnedCells": 8,
+    "continuouslyEnabledStoppedCells": 796,
+    "continuouslyEnabledConsumedCells": 804,
+    "economyNormalizationConsumedCells": 4,
+    "counterfactualNormalizationConsumedCells": 4,
+    "economyTotalConsumedCellsIncludingWarmupAndNormalization": 316,
+    "counterfactualTotalConsumedCellsIncludingWarmupAndNormalization": 816,
+    "economyDeltaStoredJ": 20412523528.95015,
+    "continuousDeltaStoredJ": 87660840803.18974,
+    "equalInitialStoredEnergy": true,
+    "equalFinalStoredEnergy": false,
+    "equalFinalNormalizedStoredEnergy": true,
+    "counterfactualHadAccident": false,
+    "quantitativeSavingComparable": true
+  },
+  "acceptanceFailures": []
+}

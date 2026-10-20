@@ -1,13 +1,13 @@
 // E2E M10 (часть 2): симуляция в Web Worker, главный поток только рисует.
-import { chromium } from 'playwright';
-const b = await chromium.launch({ executablePath: '/usr/local/bin/chromium', args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--use-gl=angle'] });
+import { launchBrowser, selectedBrowser, appUrl, projectRoot } from './browser.mjs';
+const b = await launchBrowser(selectedBrowser(), { args: ['--enable-unsafe-swiftshader', '--use-gl=angle'] });
 const errs = []; let fails = 0;
 const ok = (c, m) => { console.log((c ? '  ✔ ' : '  ✘ ') + m); if (!c) fails++; };
 const watch = p => { p.on('pageerror', e => errs.push('PAGEERROR ' + e.message)); p.on('console', m => { if (m.type() === 'error') errs.push('CONSOLE ' + m.text()); }); };
 const ready = async p => { await p.waitForFunction(() => window.__texMs != null && window.__zavod && window.__zavod.sim && window.__zavod.sim.snaps > 3, null, { timeout: 180000 }); await p.waitForTimeout(400); };
 const ctx = await b.newContext({ viewport: { width: 1600, height: 900 }, locale: 'ru-RU' });
 let p = await ctx.newPage(); watch(p);
-await p.goto('file:///data/game/dist/index.html'); await ready(p);
+await p.goto(appUrl(import.meta.url)); await ready(p);
 const s1 = await p.evaluate(async () => { const z = window.__zavod; z.ui.close(); const a = z.sim.snaps, t = z.game.tick; await new Promise(r => setTimeout(r, 2000)); return { snaps: z.sim.snaps - a, ticks: z.game.tick - t, ups: z.sim.ups, chunks: z.game.world.chunks.size, errors: z.sim.errors }; });
 ok(s1.ticks > 100 && s1.ticks < 140, 'тики идут в Worker: ' + JSON.stringify(s1));
 ok(s1.snaps > 10 && s1.chunks > 10, 'зеркало получает снимки и чанки');
@@ -36,10 +36,16 @@ const bl = await p.evaluate(() => { const g = window.__zavod.game; let n = 0; fo
 ok(bl === 1, 'команда build из главного потока исполнена в Worker: конвейеров ' + bl);
 // сохранение/загрузка
 await p.evaluate(async () => { await window.__zavod.saveTo('1'); });
-const tk = await p.evaluate(() => window.__zavod.game.tick);
+// Compare with the tick captured by the Worker save response, not the mirror's
+// later snapshot: the render mirror may advance beyond the saved Worker tick.
+const tk = await p.evaluate(() => window.__zavod.ui.h.listSaves().find(s => s.slot === '1')?.tick || 0);
 await p.reload(); await ready(p);
+// Startup waits for save restoration before presenting the unified menu.
+await p.waitForFunction(() => window.__zavod.ui.open === 'menu', null, { timeout: 180000 });
 const ld = await p.evaluate(() => { const g = window.__zavod.game; let f = 0; for (const e of g.ents.values()) if (e.proto === 'stone-furnace') f++; return { seed: g.seed, tick: g.tick, f }; });
 ok(ld.seed === 42 && ld.f === 1 && ld.tick >= tk, 'сохранение из Worker загружено после перезагрузки ' + JSON.stringify(ld));
+await p.locator('.menu-primary-actions [data-act="menu-continue"]').click();
+await p.waitForFunction(() => window.__zavod.ui.open === null);
 // нагрузка: большой завод в воркере, главный поток держит кадры
 const bench = await p.evaluate(async () => { const z = window.__zavod;
   await z.workerEval(`const x0=Math.floor(g.player.x)+20,y0=Math.floor(g.player.y)-40; for(let y=y0;y<y0+80;y++)for(let x=x0;x<x0+80;x++) if(g.world.decor(x,y)) g.world.removeDecor(x,y);

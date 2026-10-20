@@ -1,5 +1,6 @@
 // Бот-тест: сценарий партии от пустой карты до запуска ракеты. Только команды игрока; логистика — руками бота.
-import { Factory, Cell } from './factory';
+import { Factory, Cell, planPowerFluidPorts } from './factory';
+import { Guarded, withDeps } from './defense';
 import { BotError, Task } from './core';
 import { PROTOS, RECIPES } from './core';
 import { TECHS } from '../../src/data/techs';
@@ -14,6 +15,15 @@ import { shapeOf } from '../../src/sim/railgeo';
 const RES = { iron: 1, copper: 2, coal: 3, stone: 4 } as const;
 type ResName = keyof typeof RES;
 const ORE: Record<ResName, string> = { iron: 'iron-ore', copper: 'copper-ore', coal: 'coal', stone: 'stone' };
+export function powerCoalOrder(patches: Patch[], ref: XY, preserveOtherOres: boolean): Patch[] {
+  const overlaps = (a: Patch, b: Patch) => a.box[0] <= b.box[2] && a.box[2] >= b.box[0] && a.box[1] <= b.box[3] && a.box[3] >= b.box[1];
+  const conflicts = (coal: Patch) => preserveOtherOres && patches.some(p =>
+    (p.res === RES.iron || p.res === RES.copper) && p.amt >= 20000 && overlaps(coal, p));
+  return patches.filter(p => p.res === RES.coal && p.amt >= 30000).slice().sort((a, b) => {
+    const conflictOrder = Number(conflicts(a)) - Number(conflicts(b));
+    return conflictOrder || Math.hypot(a.c[0] - ref[0], a.c[1] - ref[1]) - Math.hypot(b.c[0] - ref[0], b.c[1] - ref[1]);
+  });
+}
 export interface Patch { res: number; tiles: number; amt: number; c: XY; box: [number, number, number, number]; }
 export const RESEARCH = ['automation', 'logistic-science-pack', 'electronics', 'steel-processing', 'fast-inserter', 'automation-2', 'oil-processing', 'solar-energy', 'plastics',
   'sulfur-processing', 'engine', 'advanced-electronics', 'chemical-science-pack', 'battery', 'advanced-oil-processing', 'lubricant', 'modules', 'advanced-electronics-2',
@@ -21,12 +31,24 @@ export const RESEARCH = ['automation', 'logistic-science-pack', 'electronics', '
   'modules-2', 'low-density-structure', 'rocket-fuel', 'concrete', 'modules-3', 'rocket-silo',
   'logistics', 'logistics-2', 'railway', 'automated-rail-transportation', 'rail-signals']; // v1.7: ж/д — после шахты, демо-участок после ракеты
 
-export class Run extends Factory {
-  patches: Patch[] = []; base: XY = [0, 0]; oilAt: XY = [0, 0]; wells: XY[] = [];
+/** v1.14.1: порядок исследований с обороной (при включённом Рое): турели и патроны — после стали, лазеры — после батарей */
+export function defenseOrder(): string[] {
+  const out: string[] = []; const put = (a: string[]) => { for (const t of a) if (!out.includes(t)) out.push(t); };
+  for (const t of RESEARCH) {
+    put([t]);
+    if (t === 'steel-processing') put(withDeps(['turrets', 'stone-walls', 'military', 'military-2', 'bullet-damage-1', 'bullet-speed-1']));
+    if (t === 'battery') put(withDeps(['laser-turret', 'laser-damage-1', 'laser-speed-1', 'bullet-damage-2']));
+    if (t === 'advanced-electronics-2') put(withDeps(['laser-damage-2', 'laser-speed-2', 'bullet-damage-3', 'laser-damage-3']));
+  }
+  return out;
+}
+export class Run extends Guarded {
+  patches: Patch[] = []; oilAt: XY = [0, 0]; wells: XY[] = [];
   burners: { d: number; f: number }[] = [];
-  milestones: { t: number; what: string }[] = []; boot = true;
+  milestones: { t: number; what: string }[] = [];
   *handFallback(missing: Record<string, number>): Task<boolean> {
-    if (!this.boot) return false;
+    // v1.15: дерево нужно и после старта (столбы) — на «Острове» его нет в стартовом наборе, а запас в сундуках не копится
+    if (!this.boot) { if (!(missing.wood > 0)) return false; yield* this.gather('wood', this.inv('wood') + Math.ceil(missing.wood)); return true; }
     for (const [it, n] of Object.entries(missing)) {
       const want = this.inv(it) + Math.ceil(n);
       if (it === 'stone') { yield* this.rocks(1); if (this.inv('stone') < want) { const p = this.patch('stone'); yield* this.gather('stone', want, p.c[0], p.c[1]); } return true; }
@@ -38,7 +60,7 @@ export class Run extends Factory {
   mark(what: string) { this.milestones.push({ t: this.g.tick, what }); this.log('★ ' + what); }
   // ---------- разведка карты ----------
   survey() {
-    const w = this.g.world; const seen = new Set<number>(); const R = 200;
+    const w = this.g.world; const seen = new Set<number>(); const R = 1000;
     for (let y = -R; y < R; y += 2) for (let x = -R; x < R; x += 2) {
       const r = w.res(x, y); if (!r || r === 5 || seen.has(key(x, y))) continue;
       const q: XY[] = [[x, y]]; seen.add(key(x, y)); let n = 0, amt = 0, sx = 0, sy = 0, x0 = x, x1 = x, y0 = y, y1 = y;
@@ -172,9 +194,12 @@ export class Run extends Factory {
   powerFull = false;
   *power(units: number): Task {
     const used: Patch[] = []; let b = powerBlock(units); let at: { x: number; y: number } | null = null;
+    const hasPower = this.cells.some(c => c.kind === 'power');
     const ref = this.cells.find(c => c.kind === 'power')?.m || this.patch('coal').c;
+    const coalOrder = powerCoalOrder(this.patches, ref, hasPower);
     for (;;) {
-      const coal = this.patch('coal', ref[0], ref[1], 30000, used);
+      const coal = coalOrder.find(p => !used.includes(p));
+      if (!coal) throw new BotError('нет месторождения: coal');
       for (let k = units; k >= 1 && !at; k--) { b = powerBlock(k); at = this.oreSpot(b, RES.coal, coal.c[0], coal.c[1], 30, b.bp.entities.filter(e => e.p === 'electric-mining-drill').map(e => [e.x, e.y] as XY)); }
       if (at) break; used.push(coal); if (used.length > 10) throw new BotError('нет места под электростанцию на угле');
     }
@@ -186,8 +211,12 @@ export class Run extends Factory {
     }
     // порты бойлеров — в план (чтобы чужие трубы не прилипли)
     const rec = yield* this.placeBlock(b, at.x, at.y, 'power', { power: this.poles().length > 0 });
-    const tiles = this.netTiles('water-p'); for (const e of b.bp.entities) if (e.p === 'pipe') tiles.add(key(at.x + e.x, at.y + e.y));
+    planPowerFluidPorts(this.plan, b, at.x, at.y);
     yield* this.pipeTo('water-p', at.x - 1, at.y + 11);
+    // A block's internal cross-pipe is not yet connected to the pump network.
+    // Register it only after routing the external boiler feed, or pipeTo may
+    // mistake this new local pipe for an existing source and leave it isolated.
+    const tiles = this.netTiles('water-p'); for (const e of b.bp.entities) if (e.p === 'pipe') tiles.add(key(at.x + e.x, at.y + e.y));
     for (const id of rec.cells) { const bo = this.E(this.cells[id].m); if (bo && !(bo.fuel?.count)) { yield* this.reach(bo); this.put(bo, 'coal', Math.min(10, this.inv('coal'))); yield; } }
     yield* this.until(() => [...this.g.powerNets.values()].some(n => n.supply > 0) || true, 60, 'электричество');
     this.log(`электростанция: ${units} бойлер(а), ${units * 2} двигателя`);
@@ -304,8 +333,9 @@ export class Run extends Factory {
   *tech(t: string, maxMin = 600): Task { yield* this.serve(() => this.techDone(t), maxMin, 'исследование ' + t); this.mark('изучено: ' + TECHS[t].name); }
   cellsOf(recipe: string) { return this.cells.filter(c => c.recipe === recipe); }
   // ---------- сценарий ----------
-  *main(): Task {
-    this.researchOrder = RESEARCH; this.survey();
+  *main(): Task { yield* this.withRecovery(this.progression()); }
+  private *progression(): Task {
+    this.researchOrder = this.enemiesOn ? defenseOrder() : RESEARCH; this.survey();
     yield* this.bootstrap();
     yield* this.power(1); this.boot = false;
     this.mark('электричество');

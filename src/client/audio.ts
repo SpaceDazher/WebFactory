@@ -10,6 +10,8 @@ export class GameAudio {
   private noise!: AudioBuffer; private last: Record<string, number> = {}; private voices = 0;
   private hum: { osc: OscillatorNode[]; g: GainNode; lp: BiquadFilterNode } | null = null;
   private rattle: { g: GainNode } | null = null; private steam: { g: GainNode } | null = null;
+  private speakerLoops = new Map<string, { sound: string; nodes: OscillatorNode[]; gain: GainNode; pan?: StereoPannerNode }>();
+  private speakerOneShots = new Map<string, { gain: GainNode; pan?: StereoPannerNode; timer: number }>();
   private delay!: DelayNode; private musicT = 0; private musicTimer = 0; private bar = 0; private pieceStart = 0;
   vol: AudioVol = { master: 0.8, sfx: 0.8, music: 0.45, ambient: 0.6 };
   /** создать контекст по первому жесту пользователя (требование браузеров) */
@@ -67,14 +69,27 @@ export class GameAudio {
     return Math.round((t - c.currentTime) * 1000);
   }
   /** звуковое событие; dx, dy — смещение от инженера в клетках */
-  play(k: string, dx = 0, dy = 0) {
+  play(k: string, dx = 0, dy = 0, options?: { radius?: number; gain?: number; global?: boolean; key?: string; speaker?: boolean }) {
     const c = this.ctx; if (!c || c.state !== 'running' || this.vol.master <= 0 || this.vol.sfx <= 0) return;
-    const dist = Math.hypot(dx, dy); if (dist > 40) return;
-    const minGap: Record<string, number> = { turret: .07, shot: .06, mine: .05, build: .04, craft: .08, squish: .05, alert: 2, error: .2, acid: .1 };
-    const now = c.currentTime; if (now - (this.last[k] || 0) < (minGap[k] ?? .03)) return; this.last[k] = now;
+    const dist = Math.hypot(dx, dy), radius = options?.radius ?? 40; if (!options?.global && dist > radius) return;
+    const minGap: Record<string, number> = { turret: .07, shot: .06, mine: .05, build: .04, craft: .08, squish: .05, alert: 2, ralert: 3, error: .2, acid: .1 };
+    const lastKey = options?.key || k, now = c.currentTime; if (now - (this.last[lastKey] || 0) < (minGap[k] ?? .03)) return; this.last[lastKey] = now;
     if (this.voices > 24) return; this.voices++; setTimeout(() => this.voices--, 600);
-    const near = k === 'oscar' || k === 'alert' || k === 'research' || k === 'goal' || k === 'error' || k === 'craft' || k === 'ui' || k === 'death' || k === 'launch';
-    const vol = near ? 1 : 1 / (1 + dist * dist / 90); const o = this.out(near ? 0 : dx / 18, vol);
+    const near = options?.global || k === 'oscar' || k === 'alert' || k === 'ralert' || k === 'research' || k === 'goal' || k === 'error' || k === 'craft' || k === 'ui' || k === 'death' || k === 'launch';
+    const attenuation = options?.radius == null ? 1 / (1 + dist * dist / 90) : Math.max(0, 1 - dist / Math.max(1, radius));
+    const vol = (options?.radius == null && !options?.global ? (near ? 1 : attenuation) : options?.global ? 1 : attenuation) * (options?.gain ?? 1);
+    let pan: StereoPannerNode | undefined;
+    const o = options?.speaker ? c.createGain() : this.out(near ? 0 : dx / 18, vol);
+    if (options?.speaker) {
+      o.gain.value = vol;
+      if (c.createStereoPanner) { pan = c.createStereoPanner(); pan.pan.value = options.global ? 0 : Math.max(-1, Math.min(1, dx / Math.max(1, radius))); o.connect(pan); pan.connect(this.sfx); }
+      else o.connect(this.sfx);
+    }
+    if (options?.speaker && options.key) {
+      const duration: Record<string, number> = { 'speaker-siren': 1200, 'speaker-alert': 420, 'speaker-bell': 520, 'speaker-horn': 700, 'speaker-completion': 900 };
+      const key = options.key, timer = window.setTimeout(() => { const shot = this.speakerOneShots.get(key); if (shot?.gain === o) { this.speakerOneShots.delete(key); o.disconnect(); pan?.disconnect(); } }, duration[k] || 1000);
+      this.speakerOneShots.set(key, { gain: o, pan, timer });
+    }
     const T = now + .005;
     switch (k) {
       case 'build': this.burst(o, T, .09, 'lowpass', 900, 200, .5); this.tone({ f: 140, f2: 60, t: .14, g: .45 }, o, T); this.burst(o, T, .03, 'highpass', 3000, null, .12, 1, .05); break;
@@ -89,12 +104,26 @@ export class GameAudio {
       case 'ui': this.tone({ f: 1400, t: .025, g: .05, type: 'triangle' }, o, T); break;
       case 'research': [0, 4, 7, 12].forEach((s, i) => this.tone({ f: MIDI(72 + s), t: .5, g: .14, type: 'triangle', at: i * .11 }, o, T)); break;
       case 'goal': this.tone({ f: MIDI(76), t: .35, g: .14, type: 'triangle' }, o, T); this.tone({ f: MIDI(83), t: .6, g: .12, type: 'triangle', at: .14 }, o, T); break;
+      case 'speaker-siren': for (let i = 0; i < 3; i++) { this.tone({ f: 660, f2: 1100, t: .22, g: .16, type: 'sawtooth', at: i * .34 }, o, T); this.tone({ f: 1100, f2: 660, t: .22, g: .16, type: 'sawtooth', at: i * .34 + .12 }, o, T); } break;
+      case 'speaker-alert': this.tone({ f: 1320, t: .13, g: .16, type: 'triangle' }, o, T); this.tone({ f: 880, t: .18, g: .13, type: 'triangle', at: .16 }, o, T); break;
+      case 'speaker-bell': this.tone({ f: 1046, t: .45, g: .2, type: 'sine' }, o, T); this.tone({ f: 1568, t: .32, g: .06, type: 'sine', at: .015 }, o, T); break;
+      case 'speaker-horn': this.tone({ f: 220, f2: 170, t: .65, g: .24, type: 'square' }, o, T); break;
+      case 'speaker-completion': [0, 4, 7, 12].forEach((s, i) => this.tone({ f: MIDI(72 + s), t: .35, g: .15, type: 'triangle', at: i * .12 }, o, T)); break;
+      case 'ralert': for (let i = 0; i < 2; i++) { this.tone({ f: 740, t: .1, g: .08, type: 'triangle', at: i * .22 }, o, T); this.tone({ f: 988, t: .1, g: .08, type: 'triangle', at: i * .22 + .11 }, o, T); } break;
       case 'alert': for (let i = 0; i < 3; i++) { this.tone({ f: 880, t: .12, g: .09, type: 'square', at: i * .3 }, o, T); this.tone({ f: 660, t: .12, g: .09, type: 'square', at: i * .3 + .15 }, o, T); } break;
       case 'error': this.tone({ f: 190, t: .12, g: .12, type: 'square' }, o, T); this.tone({ f: 150, t: .14, g: .12, type: 'square', at: .1 }, o, T); break;
       case 'boom': this.burst(o, T, 1.1, 'lowpass', 1800, 80, .9); this.tone({ f: 70, f2: 30, t: .8, g: .7 }, o, T); break;
       case 'squish': this.burst(o, T, .16, 'bandpass', 500, 200, .45, 3); this.tone({ f: 260, f2: 90, t: .15, g: .2, type: 'sawtooth' }, o, T); break;
       case 'acid': this.burst(o, T, .4, 'highpass', 2500, 900, .25); break;
       case 'turret': case 'shot': this.burst(o, T, .06, 'highpass', k === 'turret' ? 900 : 1300, null, .5); this.tone({ f: 160, f2: 70, t: .05, g: .35 }, o, T); break;
+      // v1.14: новое оружие и оборона
+      case 'laser': this.tone({ f: 1800, f2: 600, t: .12, g: .08, type: 'sawtooth' }, o, T); break;
+      case 'tesla': this.burst(o, T, .18, 'bandpass', 4200, 1500, .3, 4); this.tone({ f: 120, t: .15, g: .12, type: 'square' }, o, T); break;
+      case 'rail': this.tone({ f: 300, f2: 2400, t: .2, g: .15, type: 'sawtooth' }, o, T); this.burst(o, T, .3, 'highpass', 2000, null, .4); break;
+      case 'rocket': this.burst(o, T, .5, 'lowpass', 1200, 300, .45); break;
+      case 'flame': this.burst(o, T, .2, 'lowpass', 700, 400, .18); break;
+      case 'gate': this.tone({ f: 140, f2: 90, t: .35, g: .12, type: 'triangle' }, o, T); this.burst(o, T, .3, 'bandpass', 900, 600, .08); break;
+      case 'equip': this.tone({ f: 520, t: .05, g: .08, type: 'triangle' }, o, T); this.tone({ f: 780, t: .07, g: .07, type: 'triangle', at: .05 }, o, T); break;
       case 'death': this.tone({ f: 440, f2: 110, t: 1.2, g: .2, type: 'sawtooth' }, o, T); break;
       case 'launch': {
         const src = c.createBufferSource(); src.buffer = this.noise; src.loop = true; const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.setValueAtTime(120, T); lp.frequency.linearRampToValueAtTime(900, T + 9); lp.frequency.linearRampToValueAtTime(200, T + 15);
@@ -103,6 +132,54 @@ export class GameAudio {
       }
     }
   }
+  playSpeaker(sound: string, dx: number, dy: number, radius: number, volume: number, global: boolean, eventKey: string) {
+    const aliases: Record<string, string> = { 'attack-siren': 'speaker-siren', 'short-alert': 'speaker-alert', bell: 'speaker-bell', 'warning-horn': 'speaker-horn', completion: 'speaker-completion' };
+    const soundId = aliases[sound]; if (!soundId || volume <= 0 || this.speakerOneShots.has(eventKey)) return;
+    this.play(soundId, dx, dy, { radius, gain: Math.max(0, Math.min(1, volume / 100)), global, key: eventKey, speaker: true });
+  }
+  /** Update a sounding clip without restarting its envelope or scheduled notes. */
+  updateSpeakerOneShot(eventKey: string, dx: number, dy: number, radius: number, volume: number, global: boolean) {
+    const shot = this.speakerOneShots.get(eventKey), c = this.ctx; if (!shot || !c) return;
+    const attenuation = global ? 1 : Math.max(0, 1 - Math.hypot(dx, dy) / Math.max(1, radius));
+    shot.gain.gain.setTargetAtTime(Math.max(0, Math.min(1, volume / 100)) * attenuation, c.currentTime, .025);
+    shot.pan?.pan.setTargetAtTime(global ? 0 : Math.max(-1, Math.min(1, dx / Math.max(1, radius))), c.currentTime, .04);
+  }
+  stopSpeakerOneShot(eventKey: string) {
+    const shot = this.speakerOneShots.get(eventKey), c = this.ctx; if (!shot) return;
+    this.speakerOneShots.delete(eventKey); window.clearTimeout(shot.timer);
+    if (c) { shot.gain.gain.cancelScheduledValues(c.currentTime); shot.gain.gain.setTargetAtTime(0, c.currentTime, .025); window.setTimeout(() => { shot.gain.disconnect(); shot.pan?.disconnect(); }, 150); }
+  }
+  speakerOneShotActive(eventKey: string) { return this.speakerOneShots.has(eventKey); }
+  stopAllSpeakerOneShots(includePreviews = true) { for (const key of this.speakerOneShots.keys()) if (includePreviews || !key.startsWith('speaker-preview:')) this.stopSpeakerOneShot(key); }
+  startSpeakerLoop(id: string, sound: string, dx: number, dy: number, radius: number, volume: number, global: boolean) {
+    const c = this.ctx; if (!c || c.state !== 'running' || this.vol.master <= 0 || this.vol.sfx <= 0 || volume <= 0) return;
+    const dist = Math.hypot(dx, dy); if (!global && dist >= radius) { this.stopSpeakerLoop(id); return; }
+    let loop = this.speakerLoops.get(id);
+    if (loop && loop.sound !== sound) { this.stopSpeakerLoop(id); loop = undefined; }
+    if (!loop) {
+      const gain = c.createGain(), nodes: OscillatorNode[] = []; let pan: StereoPannerNode | undefined;
+      if (c.createStereoPanner) { pan = c.createStereoPanner(); gain.connect(pan); pan.connect(this.sfx); } else gain.connect(this.sfx);
+      const osc = c.createOscillator(); osc.type = sound === 'attack-siren' ? 'sawtooth' : sound === 'warning-horn' ? 'square' : 'triangle';
+      const f = sound === 'attack-siren' ? 700 : sound === 'warning-horn' ? 185 : sound === 'bell' ? 830 : sound === 'completion' ? 660 : 540;
+      osc.frequency.value = f;
+      if (sound === 'short-alert') {
+        const pulseGain = c.createGain(); pulseGain.gain.value = .55; osc.connect(pulseGain); pulseGain.connect(gain);
+        const pulse = c.createOscillator(), depth = c.createGain(); pulse.frequency.value = 2; depth.gain.value = .45; pulse.connect(depth); depth.connect(pulseGain.gain); pulse.start(); nodes.push(pulse);
+      } else osc.connect(gain);
+      osc.start(); nodes.push(osc);
+      if (sound === 'attack-siren') { const lfo = c.createOscillator(), amount = c.createGain(); lfo.frequency.value = 0.8; amount.gain.value = 350; lfo.connect(amount); amount.connect(osc.frequency); lfo.start(); nodes.push(lfo); }
+      loop = { sound, nodes, gain, pan }; this.speakerLoops.set(id, loop);
+    }
+    const attenuation = global ? 1 : Math.max(0, 1 - dist / Math.max(1, radius));
+    loop.gain.gain.setTargetAtTime(Math.max(0, Math.min(1, volume / 100)) * attenuation * .12, c.currentTime, .04);
+    if (loop.pan) loop.pan.pan.setTargetAtTime(global ? 0 : Math.max(-1, Math.min(1, dx / Math.max(1, radius))), c.currentTime, .05);
+  }
+  stopSpeakerLoop(id: string) {
+    const loop = this.speakerLoops.get(id), c = this.ctx; if (!loop) return;
+    this.speakerLoops.delete(id);
+    if (c) { loop.gain.gain.setTargetAtTime(0, c.currentTime, .035); for (const node of loop.nodes) try { node.stop(c.currentTime + .14); } catch { /* already stopped */ } setTimeout(() => { loop.gain.disconnect(); loop.pan?.disconnect(); }, 180); }
+  }
+  stopAllSpeakerLoops() { for (const id of this.speakerLoops.keys()) this.stopSpeakerLoop(id); }
   // ---------- фон завода ----------
   private loopNoise(type: BiquadFilterType, f: number, q: number): GainNode {
     const c = this.ctx!; const src = c.createBufferSource(); src.buffer = this.noise; src.loop = true;

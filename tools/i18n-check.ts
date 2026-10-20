@@ -8,11 +8,11 @@ import { PROTOS } from '../src/data/entities';
 import { NEWS } from '../src/data/news';
 import { TIPS } from '../src/ui/tips';
 const FULL = process.argv.includes('--full'); const ARGS = process.argv.slice(2).filter(a => !a.startsWith('--'));
-const FILES = ARGS.length ? ARGS : ['src/ui/ui.ts', 'src/main.ts', 'src/sim/game.ts', 'src/sim/robots.ts', 'src/sim/circuit.ts', 'src/render/renderer.ts', 'src/client/settings.ts', 'src/ui/mpui.ts', 'src/client/mp.ts', 'src/net/session.ts', 'src/net/rtc.ts', 'src/sim/trains.ts', 'src/render/rails.ts', 'src/ui/produi.ts', 'src/sim/calc.ts', 'src/sim/prodstats.ts', 'src/sim/notes.ts', 'src/sim/perf.ts', 'src/ui/modsui.ts', 'src/mods/mod.ts', 'src/mods/registry.ts', 'src/mods/zip.ts', 'src/client/modstore.ts', 'src/mods/schema.ts', 'src/sim/compat.ts'];
+const FILES = ARGS.length ? ARGS : ['src/ui/ui.ts', 'src/sim/nucguide.ts', 'src/ui/genform.ts', 'src/sim/scenario.ts', 'src/ui/editor.ts', 'src/main.ts', 'src/sim/game.ts', 'src/sim/robots.ts', 'src/sim/circuit.ts', 'src/render/renderer.ts', 'src/client/settings.ts', 'src/ui/mpui.ts', 'src/client/mp.ts', 'src/net/session.ts', 'src/net/rtc.ts', 'src/sim/trains.ts', 'src/render/rails.ts', 'src/ui/produi.ts', 'src/sim/calc.ts', 'src/sim/prodstats.ts', 'src/sim/notes.ts', 'src/sim/perf.ts', 'src/ui/modsui.ts', 'src/mods/mod.ts', 'src/mods/registry.ts', 'src/mods/zip.ts', 'src/client/modstore.ts', 'src/mods/schema.ts', 'src/sim/compat.ts', 'src/ui/modrt.ts', 'src/sim/perfworld.ts', 'src/sim/scripting.ts', 'src/mods/script.ts', 'src/mods/sandbox.ts', 'src/ui/techgraph.ts', 'src/client/perfbench.ts', 'src/ui/morph.ts', 'src/client/input.ts', 'src/sim/combat.ts', 'src/sim/enemies.ts', 'src/ui/gearui.ts', 'src/ui/scnui.ts', 'src/ui/editor.ts', 'src/sim/scenario.ts', 'src/data/challenges.ts', 'src/sim/achieve.ts', 'src/client/scnstore.ts', 'src/sim/heat.ts', 'src/sim/networks.ts', 'src/ui/xui.ts', 'src/sim/mgmt.ts', 'src/sim/x116.ts', 'src/data/statusText.ts', 'src/sim/radar.ts'];
 /** русские фрагменты строк: литералы '…', "…", `…` (подстановки ${…} с учётом вложенности вырезаются), HTML-теги — разделители */
 export function literals(src: string): string[] {
   const out: string[] = []; let i = 0;
-  const push = (t: string) => { for (const p of t.split(/<[^>]*>|"|\u0001/)) if (/[А-Яа-яЁё]/.test(p)) out.push(p); };
+  const push = (t: string) => { for (const a of t.matchAll(/(?:placeholder|title|aria-label)="([^"\u0001]*)/g)) if (/[А-Яа-яЁё]/.test(a[1])) out.push(a[1]); for (const p of t.split(/<[^>]*>|"|\u0001/)) if (/[А-Яа-яЁё]/.test(p)) out.push(p); }; // v1.11: и атрибуты-подсказки
   while (i < src.length) {
     const ch = src[i];
     if (ch === '/' && src[i + 1] === '/') { while (i < src.length && src[i] !== '\n') i++; continue; }
@@ -35,6 +35,13 @@ export function literals(src: string): string[] {
   return out;
 }
 const strs: string[] = [];
+if (!ARGS.length) FILES.push(
+  'src/sim/v117Systems.ts', 'src/sim/v117.ts', 'src/sim/bioguide.ts', 'src/sim/bio.ts',
+  'src/sim/bioRobots.ts', 'src/sim/scenario117.ts', 'src/sim/polechain.ts',
+  'src/ui/nativeui.ts', 'src/ui/bioroute.ts', 'src/ui/fluidports.ts',
+  'src/ui/drone-transfer.ts', 'src/ui/reference117.ts', 'src/data/reference117.ts',
+  'src/native/server.ts', 'src/native/play-transport.ts', 'src/client/native.ts', 'src/client/native-transport.ts',
+);
 for (const f of FILES) if (fs.existsSync(f)) strs.push(...literals(fs.readFileSync(f, 'utf8')));
 for (const it of Object.values(ITEMS)) strs.push(it.name);
 for (const p of Object.values(PROTOS)) strs.push(p.name);

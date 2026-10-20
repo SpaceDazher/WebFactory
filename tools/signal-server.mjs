@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ЗАВОД-7 v1.12: сервер сигналинга для совместной игры. Без зависимостей (Node 18+): HTTP + WebSocket вручную.
+// ЗАВОД-7 v1.12–1.13: сервер сигналинга для совместной игры. Без зависимостей (Node 18+): HTTP + WebSocket вручную.
 // Хост получает код комнаты ZVD-XXXX, друзья входят по коду; сервер пересылает предложения/ответы WebRTC
 // и — если прямое соединение не удалось — сами данные игры (ретрансляция). Игра на сервере не считается.
 // Запуск: node tools/signal-server.mjs [--port 8787]   (или PORT=8787)
@@ -47,26 +47,34 @@ function wsSock(s) {
 }
 // ---------- комнаты ----------
 function newCode() { for (;;) { let c = 'ZVD-'; for (let i = 0; i < 4; i++) c += ABC[crypto.randomInt(ABC.length)]; if (!rooms.has(c)) return c; } }
+// v1.13: у каждого в комнате — номер (хост на старте — 0); сообщения адресуются по номеру (to), без to — хосту комнаты.
+// Хост может передать комнату другому игроку (handover): новые игроки по коду придут к новому хосту.
 function onMsg(o, m) {
   switch (m.k) {
-    case 'host': { const code = newCode(); rooms.set(code, { host: o, peers: new Map(), next: 1 }); o.room = code; o.pid = 'host'; o.send({ k: 'room', code }); log('комната', code); break; }
+    case 'host': { const want = String(m.code || '').toUpperCase().trim(); const code = /^ZVD-[A-Z0-9]{4}$/.test(want) && !rooms.has(want) ? want : newCode(); /* v1.14.1: хост, потерявший связь, занимает прежний код */ const r = { host: o, peers: new Map([[0, o]]), next: 1 }; rooms.set(code, r); o.room = code; o.pid = 0; o.send({ k: 'room', code, id: 0 }); log('комната', code); break; }
     case 'join': {
       const code = String(m.code || '').toUpperCase().trim().replace(/^ZVD-?/, 'ZVD-'); const r = rooms.get(code);
-      if (!r) { o.send({ k: 'error', why: 'Нет игры с кодом ' + code }); break; }
-      const id = r.next++; r.peers.set(id, o); o.room = code; o.pid = id; o.send({ k: 'joined', code, id }); r.host.send({ k: 'peer', id }); log(code, 'вход', id); break;
+      if (!r) { o.send({ k: 'error', why: 'Нет игры с кодом ' + code + ' (хост закрыл игру или код неверный)' }); break; }
+      if (r.peers.size >= 32) { o.send({ k: 'error', why: 'В комнате слишком много подключений' }); break; }
+      const id = r.next++; r.peers.set(id, o); o.room = code; o.pid = id; o.send({ k: 'joined', code, id, host: r.host.pid }); r.host.send({ k: 'peer', id }); log(code, 'вход', id); break;
     }
-    case 'sig': case 'relay': { // хост → игрок id; игрок → хост
+    case 'sig': case 'relay': {
       const r = rooms.get(o.room); if (!r) break;
-      const to = o.pid === 'host' ? r.peers.get(+m.to) : r.host; if (!to) break;
+      const to = m.to === undefined || m.to === 'host' ? r.host : r.peers.get(+m.to); if (!to || to === o) break;
       to.send(m.k === 'sig' ? { k: 'sig', from: o.pid, data: m.data } : { k: 'relay', from: o.pid, d: m.d }); break;
+    }
+    case 'handover': { // хост комнаты → игрок m.to
+      const r = rooms.get(o.room); if (!r || r.host !== o) break; const n = r.peers.get(+m.to); if (!n) break;
+      r.host = n; n.send({ k: 'room', code: o.room, id: n.pid }); o.send({ k: 'joined', code: o.room, id: o.pid, host: n.pid }); log(o.room, 'хост →', n.pid); break;
     }
     case 'ping': o.send({ k: 'pong', t: m.t }); break;
   }
 }
 function onClose(o) {
   const r = rooms.get(o.room); if (!r) return;
-  if (o.pid === 'host') { for (const p of r.peers.values()) p.send({ k: 'gone' }); rooms.delete(o.room); log('комната закрыта', o.room); }
-  else { r.peers.delete(o.pid); r.host.send({ k: 'left', id: o.pid }); }
+  r.peers.delete(o.pid);
+  if (r.host === o) { for (const p of r.peers.values()) p.send({ k: 'gone', id: o.pid }); rooms.delete(o.room); log('комната закрыта', o.room); }
+  else { r.host.send({ k: 'left', id: o.pid }); for (const p of r.peers.values()) if (p !== r.host) p.send({ k: 'left', id: o.pid }); }
 }
 const server = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'access-control-allow-origin': '*' }); res.end(`ЗАВОД-7: сервер сигналинга. Комнат: ${rooms.size}\n`); });
 server.on('upgrade', (req, s) => {
@@ -77,5 +85,5 @@ server.on('upgrade', (req, s) => {
   const o = wsSock(s); o.onText = t => { let m; try { m = JSON.parse(t); } catch { return; } onMsg(o, m); }; o.onClose = () => onClose(o);
 });
 // раз в 30 с — ping, молчащие соединения закрываются
-setInterval(() => { for (const r of rooms.values()) for (const o of [r.host, ...r.peers.values()]) { if (!o.alive) { o.s.destroy(); continue; } o.alive = false; if (!o.s.destroyed) o.s.write(frame(9, Buffer.alloc(0))); } }, 30000).unref();
+setInterval(() => { for (const r of rooms.values()) for (const o of r.peers.values()) { if (!o.alive) { o.s.destroy(); continue; } o.alive = false; if (!o.s.destroyed) o.s.write(frame(9, Buffer.alloc(0))); } }, 30000).unref();
 server.listen(PORT, () => log(`сервер сигналинга ЗАВОД-7: ws://localhost:${PORT}`));

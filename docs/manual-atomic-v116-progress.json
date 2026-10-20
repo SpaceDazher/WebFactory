@@ -1,0 +1,83 @@
+{
+  "status": "in progress",
+  "method": "Ordinary UI mouse/keyboard through native Chrome; workerEval is read-only. No counters, inventory, position or Game.step writes.",
+  "limitations": "UI automation by Codex, not a human playtest. Engineer died once mining radioactive ore; resumed through normal respawn. Two recorded errors arose from invalid read-only workerEval probes of powerNets, not gameplay.",
+  "snapshot": {
+    "read": {
+      "tick": 175385,
+      "player": {
+        "x": 4.653333333333338,
+        "y": 43.516666666666694,
+        "hp": 250,
+        "lastHurt": 67571
+      },
+      "goals": {
+        "t0": 0,
+        "done": [
+          89820,
+          68670,
+          0,
+          0
+        ],
+        "res": null,
+        "pr": [
+          "100/100",
+          "10/10",
+          "0/30 · 0/60",
+          "0/5"
+        ]
+      },
+      "cheats": false,
+      "ghosts": 0,
+      "nuc": {
+        "zones": [],
+        "st": {
+          "acid": 181,
+          "ore": 181,
+          "rods": 20,
+          "heatBase": 14083999999.996399,
+          "lost": 28169315,
+          "burned": 1,
+          "spent": 1
+        }
+      },
+      "reactors": [
+        {
+          "x": -3,
+          "y": 41,
+          "hE": 4333397907,
+          "rt": 2874,
+          "input": {
+            "nuclear-fuel-cell": 18
+          },
+          "output": {
+            "used-nuclear-fuel-cell": 1
+          }
+        }
+      ],
+      "cf": [
+        {
+          "x": 6,
+          "y": 47,
+          "recipe": "nuclear-fuel-reprocessing",
+          "net": 308
+        }
+      ],
+      "power": [
+        {
+          "demand": 192.8,
+          "supply": 1800,
+          "satisfaction": 1
+        },
+        {
+          "demand": 30012.47,
+          "supply": 0,
+          "satisfaction": 0
+        }
+      ],
+      "radars": 100
+    },
+    "ui": "Нет исследования — нажмите T\nАтомный пуск\n⏱ 0:48:43 / 2:00:00\n✔ Произвести 100 × Урановая руда\n✔ Произвести 10 × Ядерный стержень\n○ Станция 30 МВт: держать нагрузку 60 с 0/30 · 0/60\n○ Переработать 5 × Отработанный стержень 0/5\n🦺\nЗдоровье: 250 / 250\n✋\n—\n—\n—\n🎒 H\n☣ Z\n3\n⇧1\n⇧2\n⇧3\n6\n⇧4\n⇧5\n⇧6\n3\n⇧7\n⇧8\n⇧9\n⇧0\n8\n1\n4\n2",
+    "browser": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
+  }
+}

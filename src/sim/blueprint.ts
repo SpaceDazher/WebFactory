@@ -5,9 +5,10 @@ import { PROTOS, FLOORS, FLOOR_BY_ITEM } from '../data/entities';
 import type { Game } from './game';
 import { shapeOf, rotVariant, mirrorVariant } from './railgeo';
 import { sigNode, SIG_OX, SIG_OY } from './trains';
+import { copyChestSettings, validChestSettings, type ChestSettings } from './chest-settings';
 
 /** v1.5: cc — настройки схемотехники */
-export interface BpEnt { p: string; x: number; y: number; d: Dir; recipe?: string; cc?: any; }
+export interface BpEnt { p: string; x: number; y: number; d: Dir; recipe?: string; cc?: any; stopLeft?: boolean; chest?: ChestSettings; }
 /** v1.4: tiles — покрытия [x, y, предмет]: роботы кладут их по чертежу */
 export interface Blueprint { v: 1; name: string; icons: string[]; w: number; h: number; entities: BpEnt[]; tiles?: [number, number, string][];
   /** v1.5: провода сигналов [индекс A, индекс B, цвет 0 — красный / 1 — зелёный, v1.6: клемма A, клемма B (1 — выход комбинатора)] */ wires?: BpWire[]; }
@@ -38,7 +39,12 @@ export function makeBlueprint(g: Game, x0: number, y0: number, x1: number, y1: n
   const entities: BpEnt[] = list.map(({ e }) => {
     const o: BpEnt = { p: e.proto, x: e.x - mx, y: e.y - my, d: e.dir };
     if (e.recipe && (e.t === 'assembler' || e.t === undefined)) o.recipe = e.recipe;
+    if (e.t === 'stop' || (e.ghost && PROTOS[e.proto]?.type === 'stop')) o.stopLeft = e.stopLeft === true;
     if (e.cc && !e.ghost) o.cc = JSON.parse(JSON.stringify(e.cc));
+    if (PROTOS[e.proto]?.type === 'chest') {
+      if (e.ghost && e.chest) o.chest = copyChestSettings(e.chest, PROTOS[e.proto].slots!);
+      else if (!e.ghost) o.chest = { limit: e.slotLimit ?? null, filters: (e.filt || e.inv?.filt || []).slice() };
+    }
     (o as any)._id = e.ghost ? -1 : e.id;
     return o;
   }).sort((a, b) => a.y - b.y || a.x - b.x);
@@ -66,6 +72,11 @@ export function rotateBp(bp: Blueprint): Blueprint {
 export function flipBp(bp: Blueprint, horiz: boolean): Blueprint {
   const entities = bp.entities.map(e => {
     const [w, h] = dims(e.p, e.d);
+    if (PROTOS[e.p].type === 'stop') {
+      const x = horiz ? bp.w - (e.x + w) : e.x, y = horiz ? e.y : bp.h - (e.y + h);
+      const d = horiz ? (e.d % 2 === 1 ? (e.d + 2) % 4 : e.d) : (e.d % 2 === 0 ? (e.d + 2) % 4 : e.d);
+      return { ...e, x, y, d: d as Dir, stopLeft: e.stopLeft !== true };
+    }
     if (PROTOS[e.p].type === 'signal') { // v1.8: отражается узел и направление хода; светофор встаёт справа от нового направления
       const [nx, ny, hh] = sigNode({ x: e.x, y: e.y, dir: e.d }); const h2 = horiz ? (8 - hh) % 8 : (12 - hh) % 8;
       const mx = horiz ? bp.w - nx : nx, my = horiz ? ny : bp.h - ny;
@@ -86,7 +97,8 @@ export function bpCost(bp: Blueprint): Record<string, number> {
 }
 export function bpEntDims(e: BpEnt) { return dims(e.p, e.d); }
 export function validBp(o: any): o is Blueprint {
-  return !!o && o.v === 1 && Array.isArray(o.entities) && o.entities.every((e: any) => PROTOS[e.p] && PROTOS[e.p].buildable !== false && Number.isInteger(e.x) && Number.isInteger(e.y) && ([0, 1, 2, 3].includes(e.d) || ((e.p === 'curved-rail' || PROTOS[e.p].type === 'signal') && [4, 5, 6, 7].includes(e.d))))
+  if (!o || !Array.isArray(o.entities) || o.entities.some((e: any) => e?.chest !== undefined && (PROTOS[e?.p]?.type !== 'chest' || !validChestSettings(e.chest, PROTOS[e.p].slots)))) return false;
+  return !!o && o.v === 1 && Array.isArray(o.entities) && o.entities.every((e: any) => PROTOS[e.p] && PROTOS[e.p].buildable !== false && Number.isInteger(e.x) && Number.isInteger(e.y) && (e.stopLeft == null || typeof e.stopLeft === 'boolean') && ([0, 1, 2, 3].includes(e.d) || ((e.p === 'curved-rail' || PROTOS[e.p].type === 'signal') && [4, 5, 6, 7].includes(e.d))))
     && (o.wires == null || (Array.isArray(o.wires) && o.wires.every((w: any) => Array.isArray(w) && Number.isInteger(w[0]) && Number.isInteger(w[1]) && w[0] >= 0 && w[1] >= 0 && w[0] < o.entities.length && w[1] < o.entities.length && (w[2] === 0 || w[2] === 1) && (w[3] == null || w[3] === 0 || w[3] === 1) && (w[4] == null || w[4] === 0 || w[4] === 1))))
     && (o.tiles == null || (Array.isArray(o.tiles) && o.tiles.every((t: any) => Array.isArray(t) && Number.isInteger(t[0]) && Number.isInteger(t[1]) && !!FLOOR_BY_ITEM[t[2]])));
 }

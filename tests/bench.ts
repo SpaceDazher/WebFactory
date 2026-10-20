@@ -10,6 +10,7 @@ import { applyMods } from '../src/mods/registry';
 import { parsePackage } from '../src/mods/mod';
 import { readDir } from '../tools/modfs';
 import fs from 'fs';
+import { fileURLToPath } from 'node:url';
 import { Game } from '../src/sim/game';
 import { RECIPES } from '../src/data/recipes';
 import { speedMul } from '../src/sim/modules';
@@ -27,7 +28,7 @@ import { addMegaCells, beltItemCount } from '../src/sim/megabase';
 import { makeSnapper } from '../src/sim/snapshot';
 
 const args = process.argv.slice(2);
-const BASE = process.env.BENCH_BASELINE || new URL('./bench-baseline.json', import.meta.url).pathname;
+const BASE = process.env.BENCH_BASELINE || fileURLToPath(new URL('./bench-baseline.json', import.meta.url));
 
 function fresh() {
   const g = new Game(5, true, { enemies: 'none' });

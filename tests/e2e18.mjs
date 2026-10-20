@@ -1,26 +1,26 @@
 // E2E v1.4 «Хранение и покрытия»: окно склада (поиск, сортировка), стопочный манипулятор кладёт стопки по 4 и они
 // видны значками (WebGL2 и Canvas2D), кисть бетона (+/−, ЛКМ, протягивание, ПКМ), призраки покрытия кладут роботы, EN без кириллицы.
-// Запуск: node tests/e2e18.mjs [chromium|firefox|webkit] (без аргумента — все три; WebKit — из /data/pwold).
+// Запуск: node tests/e2e18.mjs [chromium|firefox|webkit] (без аргумента — все три; WebKit — из кеша Playwright).
+import { launchBrowser, selectedBrowser, appUrl, projectRoot } from './browser.mjs';
+import { startGameplay } from './gameplay-start.mjs';
 import fs from 'fs';
 import { spawnSync } from 'child_process';
-const WK = { PW: '/data/pwold/node_modules/playwright/index.mjs', PLAYWRIGHT_BROWSERS_PATH: '/data/pwold/browsers', PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS: '1', PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: 'ubuntu20.04-x64' };
-const name = process.argv[2];
+const name = process.env.PW_BROWSER || process.argv[2];
 if (!name) {
   let bad = 0; const sum = [];
   for (const n of ['chromium', 'firefox', 'webkit']) {
-    if (n === 'webkit' && !fs.existsSync(WK.PW)) { console.log('\n=== webkit: пропущен (нет /data/pwold)'); continue; }
-    const r = spawnSync(process.execPath, [process.argv[1], n], { stdio: 'inherit', env: { ...process.env, ...(n === 'webkit' ? WK : {}) } });
+    const r = spawnSync(process.execPath, [process.argv[1], n], { stdio: 'inherit', env: process.env });
     sum.push(`${n}: ${r.status === 0 ? 'OK' : 'ПРОВАЛ'}`); if (r.status !== 0) bad++;
   }
   console.log('\n' + sum.join(' · ')); process.exit(bad ? 1 : 0);
 }
-const pw = (await import(process.env.PW || 'playwright')).default;
 let fails = 0; const errs = [];
 const ok = (c, m) => { console.log((c ? '  ✔ ' : '  ✘ ') + m); if (!c) fails++; };
-const URL0 = 'file:///data/game/dist/index.html';
-const VER = JSON.parse(fs.readFileSync('/data/game/package.json', 'utf8')).version;
-fs.mkdirSync('/data/game/shots', { recursive: true });
-const b = await pw[name].launch(name === 'chromium' ? { executablePath: '/usr/local/bin/chromium', args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--use-gl=angle'] } : {});
+const URL0 = appUrl(import.meta.url);
+const ROOT = projectRoot(import.meta.url);
+const VER = JSON.parse(fs.readFileSync(ROOT + '/package.json', 'utf8')).version;
+fs.mkdirSync(ROOT + '/shots', { recursive: true });
+const b = await launchBrowser(name, name === 'chromium' ? { args: ['--enable-unsafe-swiftshader', '--use-gl=angle'] } : {});
 console.log(`\n=== ${name} ${b.version()} (игра ${VER})`);
 const watch = p => { p.on('pageerror', e => errs.push('PAGEERROR ' + e.message)); p.on('console', m => { if (m.type() === 'error') errs.push('CONSOLE ' + m.text().slice(0, 300)); }); };
 const ready = async p => { await p.waitForFunction(() => window.__texMs != null && window.__zavod && (!window.__zavod.sim || window.__zavod.sim.snaps > 2), null, { timeout: 300000 }); await p.waitForTimeout(300); };
@@ -60,6 +60,7 @@ for (const mode of ['webgl', 'canvas']) {
   await ctx.addInitScript(() => localStorage.setItem('zavod7:seenVersion', '9.9.9'));
   const p = await ctx.newPage(); watch(p);
   await p.goto(URL0 + `?render=${mode}&gfx=low`); await ready(p);
+  await startGameplay(p);
   const rmode = await p.evaluate(() => window.__zavod.R.mode);
   await p.evaluate(() => window.__zavod.ui.close());
   const sc = await W(p, SCENE);

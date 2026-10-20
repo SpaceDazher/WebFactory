@@ -1,0 +1,38 @@
+services:
+  zavod7:
+    build:
+      context: .
+      dockerfile: Dockerfile.native
+    image: zavod7-native:1.17
+    restart: unless-stopped
+    environment:
+      ZAVOD_ADVERTISE_HOST: ${ZAVOD_ADVERTISE_HOST:-}
+      ZAVOD_PUBLIC_ORIGIN: ${ZAVOD_PUBLIC_ORIGIN:-}
+      ZAVOD_RELAY_ORIGIN: ${ZAVOD_RELAY_ORIGIN:-}
+      ZAVOD_RELAY_URL: ${ZAVOD_RELAY_URL:-}
+      ZAVOD_RELAY_PUBLIC_ORIGIN: ${ZAVOD_RELAY_PUBLIC_ORIGIN:-}
+      ZAVOD_RELAY_HOST_TOKEN: ${ZAVOD_RELAY_HOST_TOKEN:-}
+      ZAVOD_RTC_ICE_URLS: ${ZAVOD_RTC_ICE_URLS:-}
+    ports:
+      - "127.0.0.1:17837:17837"
+      - "17838:17838"
+    volumes:
+      - zavod7-data:/data
+  relay:
+    profiles: ["relay"]
+    build:
+      context: .
+      dockerfile: Dockerfile.native
+    image: zavod7-native:1.17
+    restart: unless-stopped
+    command: ["node", "/app/dist/native/relay-gateway.mjs"]
+    environment:
+      ZAVOD_RELAY_PUBLIC_ORIGIN: ${ZAVOD_RELAY_PUBLIC_ORIGIN:-}
+      ZAVOD_RELAY_HOST_TOKEN: ${ZAVOD_RELAY_HOST_TOKEN:-}
+      ZAVOD_RELAY_PORT: 17900
+      ZAVOD_RELAY_REGISTRATION: ${ZAVOD_RELAY_REGISTRATION:-private}
+      ZAVOD_RELAY_TRUST_PROXY: ${ZAVOD_RELAY_TRUST_PROXY:-0}
+    ports:
+      - "127.0.0.1:${ZAVOD_RELAY_BIND_PORT:-17900}:17900"
+volumes:
+  zavod7-data:

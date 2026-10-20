@@ -1,26 +1,26 @@
 // E2E v1.9 «Мегабаза»: статистика 2.0 (P, окна и вкладки, узкие места), калькулятор (K, из статистики, заметка на карте),
 // профайлер F3 / Shift+F3, карта издалека (LOD), бесконечные исследования в окне технологий, EN без кириллицы, ?bench=mega (коротко).
-// Запуск: node tests/e2e24.mjs [chromium|firefox|webkit] (без аргумента — все три; WebKit — из /data/pwold).
+// Запуск: node tests/e2e24.mjs [chromium|firefox|webkit] (без аргумента — все три; WebKit — из кеша Playwright).
+import { launchBrowser, selectedBrowser, appUrl, projectRoot } from './browser.mjs';
+import { startGameplay } from './gameplay-start.mjs';
 import fs from 'fs';
 import { spawnSync } from 'child_process';
-const WK = { PW: '/data/pwold/node_modules/playwright/index.mjs', PLAYWRIGHT_BROWSERS_PATH: '/data/pwold/browsers', PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS: '1', PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: 'ubuntu20.04-x64' };
-const name = process.argv[2];
+const name = process.env.PW_BROWSER || process.argv[2];
 if (!name) {
   let bad = 0; const sum = [];
   for (const n of ['chromium', 'firefox', 'webkit']) {
-    if (n === 'webkit' && !fs.existsSync(WK.PW)) { console.log('\n=== webkit: пропущен (нет /data/pwold)'); continue; }
-    const r = spawnSync(process.execPath, [process.argv[1], n], { stdio: 'inherit', env: { ...process.env, ...(n === 'webkit' ? WK : {}) } });
+    const r = spawnSync(process.execPath, [process.argv[1], n], { stdio: 'inherit', env: process.env });
     sum.push(`${n}: ${r.status === 0 ? 'OK' : 'ПРОВАЛ'}`); if (r.status !== 0) bad++;
   }
   console.log('\n' + sum.join(' · ')); process.exit(bad ? 1 : 0);
 }
-const pw = (await import(process.env.PW || 'playwright')).default;
 let fails = 0; const errs = [];
 const ok = (c, m) => { console.log((c ? '  ✔ ' : '  ✘ ') + m); if (!c) fails++; };
-const URL0 = 'file:///data/game/dist/index.html';
-const VER = JSON.parse(fs.readFileSync('/data/game/package.json', 'utf8')).version;
-fs.mkdirSync('/data/game/shots', { recursive: true });
-const b = await pw[name].launch(name === 'chromium' ? { executablePath: '/usr/local/bin/chromium', args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--use-gl=angle'] } : {});
+const URL0 = appUrl(import.meta.url);
+const ROOT = projectRoot(import.meta.url);
+const VER = JSON.parse(fs.readFileSync(ROOT + '/package.json', 'utf8')).version;
+fs.mkdirSync(ROOT + '/shots', { recursive: true });
+const b = await launchBrowser(name, name === 'chromium' ? { args: ['--enable-unsafe-swiftshader', '--use-gl=angle'] } : {});
 console.log(`\n=== ${name} ${b.version()} (игра ${VER})`);
 const watch = p => { p.on('pageerror', e => errs.push('PAGEERROR ' + e.message)); p.on('console', m => { if (m.type() === 'error') errs.push('CONSOLE ' + m.text().slice(0, 300)); }); };
 const ready = async p => { await p.waitForFunction(() => window.__texMs != null && window.__zavod && (!window.__zavod.sim || window.__zavod.sim.snaps > 2), null, { timeout: 300000 }); await p.waitForTimeout(300); };
@@ -42,6 +42,7 @@ await ctx.addInitScript(() => localStorage.setItem('zavod7:seenVersion', '9.9.9'
 const p = await ctx.newPage(); watch(p);
 const win = (pg = p) => pg.evaluate(() => document.getElementById('win').innerText);
 await p.goto(URL0 + '?gfx=low'); await ready(p);
+await startGameplay(p);
 await p.evaluate(() => window.__zavod.ui.close());
 // маленькое производство в Worker: сборщик схем без провода — узкое место «медный провод»
 const sc = await W(p, `
@@ -88,11 +89,11 @@ await p.keyboard.press('Shift+F3'); await p.keyboard.press('F3');
 await p.evaluate(() => { window.__zavod.view.zoom = 0.1; }); await p.waitForTimeout(2500);
 const lod = await p.evaluate(() => ({ n: window.__zavod.R.stat.lod || 0, items: window.__zavod.sim?.nItems }));
 ok(lod.n > 0 && lod.items === 0, `карта издалека: чанков картинкой ${lod.n}, предметов в кадре ${lod.items}`);
-await p.screenshot({ path: '/data/game/shots/e2e24-lod.png' });
+await p.screenshot({ path: ROOT + '/shots/e2e24-lod.png' });
 await p.evaluate(() => { window.__zavod.view.zoom = 1; }); await p.waitForTimeout(800);
 // бесконечные исследования
 await W(p, `g.research.done.add('rocket-silo'); return 1`); await p.waitForTimeout(500);
-await p.keyboard.press('KeyT'); await p.waitForTimeout(800); t = await win();
+await p.keyboard.press('KeyT'); await p.waitForTimeout(800); await p.evaluate(() => { const u = window.__zavod.ui; u.techView = 'list'; u.render(true); }); await p.waitForTimeout(300); t = await win(); // 1.16: по умолчанию окно технологий открывается графом
 ok(/Следующий уровень: ×1\.00 → ×1\.10/.test(t) && /× 250/.test(t), 'окно технологий: цена 250 и прирост следующего уровня');
 await p.evaluate(() => window.__zavod.ui.close());
 // EN
@@ -103,6 +104,7 @@ for (const w of ['stats', 'calc', 'map', 'tech']) {
   const tt = await win(); const bad = tt.split('\n').filter(l => CYR.test(l) && !/🧮/.test(l));
   ok(!bad.length && tt.length > 20, `EN «${w}»: без кириллицы${bad.length ? ' — ' + bad.slice(0, 3).join(' | ') : ''}`);
 }
+await p.evaluate(() => { const u = window.__zavod.ui; u.menuReturnTo = null; u.close(); }); // 1.16: при открытом окне F3 не доходит до игры, и читался старый русский текст скрытой панели
 await p.keyboard.press('F3'); await p.keyboard.press('Shift+F3'); await p.waitForTimeout(2500);
 dbg = await p.evaluate(() => document.getElementById('debug').innerText);
 ok(!CYR.test(dbg.replace(/seed.*$/s, '')), `EN F3 без кириллицы${CYR.test(dbg) ? ': ' + dbg.split('\n').filter(l => CYR.test(l)).slice(0, 2).join(' | ') : ''}`);

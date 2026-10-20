@@ -1,24 +1,22 @@
 // E2E п. 6 плана v1.0 (мелкие доработки): озвучка ОСКАРа и интерфейса, обучающие подсказки, слоты сохранений с превью.
-// Запуск: node tests/e2e13.mjs [chromium|firefox|webkit] (без аргумента — все три; WebKit — как в e2e12, из /data/pwold).
+// Запуск: node tests/e2e13.mjs [chromium|firefox|webkit] (без аргумента — все три).
 // Речь проверяется подменой speechSynthesis (в headless-браузерах голосов нет), запасной «голос» — без подмены.
+import { launchBrowser, selectedBrowser, appUrl, projectRoot } from './browser.mjs';
 import fs from 'fs';
 import { spawnSync } from 'child_process';
-const WK = { PW: '/data/pwold/node_modules/playwright/index.mjs', PLAYWRIGHT_BROWSERS_PATH: '/data/pwold/browsers', PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS: '1', PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: 'ubuntu20.04-x64' };
-const name = process.argv[2];
+const name = process.env.PW_BROWSER || process.argv[2];
 if (!name) {
   let bad = 0; const sum = [];
   for (const n of ['chromium', 'firefox', 'webkit']) {
-    if (n === 'webkit' && !fs.existsSync(WK.PW)) { console.log('\n=== webkit: пропущен (нет /data/pwold)'); continue; }
-    const r = spawnSync(process.execPath, [process.argv[1], n], { stdio: 'inherit', env: { ...process.env, ...(n === 'webkit' ? WK : {}) } });
+    const r = spawnSync(process.execPath, [process.argv[1], n], { stdio: 'inherit', env: process.env });
     sum.push(`${n}: ${r.status === 0 ? 'OK' : 'ПРОВАЛ'}`); if (r.status !== 0) bad++;
   }
   console.log('\n' + sum.join(' · ')); process.exit(bad ? 1 : 0);
 }
-const pw = (await import(process.env.PW || 'playwright')).default;
 let fails = 0; const errs = [];
 const ok = (c, m) => { console.log((c ? '  ✔ ' : '  ✘ ') + m); if (!c) fails++; };
-const URL0 = 'file:///data/game/dist/index.html';
-const b = await pw[name].launch(name === 'chromium' ? { executablePath: '/usr/local/bin/chromium', args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--use-gl=angle'] } : {});
+const URL0 = appUrl(import.meta.url);
+const b = await launchBrowser(name, name === 'chromium' ? { args: ['--enable-unsafe-swiftshader', '--use-gl=angle'] } : {});
 console.log(`\n=== ${name} ${b.version()}`);
 const watch = p => { p.on('pageerror', e => errs.push('PAGEERROR ' + e.message)); p.on('console', m => { if (m.type() === 'error') errs.push('CONSOLE ' + m.text().slice(0, 300)); }); };
 const ready = async p => { await p.waitForFunction(() => window.__texMs != null && window.__zavod && (!window.__zavod.sim || window.__zavod.sim.snaps > 2), null, { timeout: 300000 }); await p.waitForTimeout(300); };
@@ -104,7 +102,13 @@ const p3 = await ctx3.newPage(); watch(p3); await p3.goto(URL0 + '?gfx=low'); aw
 const tipIn = (w, ent) => p3.evaluate(([w, ent]) => { const z = window.__zavod; z.ui.close(); if (ent != null) z.ui.toggle('ent', ent); else z.ui.toggle(w); const t = document.querySelector('#win .tipbox'); return t ? t.dataset.tipkey : null; }, [w, ent]);
 ok(await tipIn('inv') === 'inv', 'первое открытие инвентаря — подсказка');
 await p3.screenshot({ path: `shots/p6-${name}-tip.png` });
-ok(await tipIn('inv') === null, 'второе открытие — без подсказки');
+const invV12 = await p3.evaluate(() => { const z = window.__zavod; z.ui.close(); z.ui.toggle('inv'); const t = document.querySelector('#win .tipbox'); return t ? { key: t.dataset.tipkey, text: t.innerText } : null; });
+ok(invV12?.key === 'inv:v12' && /Новое: стопки и быстрая погрузка/.test(invV12.text) && /Shift\+ПКМ/.test(invV12.text), `новая версия инвентаря показывает отдельную подсказку о стопках: ${invV12?.key || 'нет'}`);
+await p3.evaluate(() => document.querySelector('#win [data-act="tipok"]')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })));
+const invV111 = await p3.evaluate(() => { const t = document.querySelector('#win .tipbox'); return t ? { key: t.dataset.tipkey, text: t.innerText } : null; });
+ok(invV111?.key === 'inv:v111' && /Новое: быстрый доступ/.test(invV111.text) && /Средняя кнопка/.test(invV111.text), `после подсказки о стопках показывается отдельная подсказка быстрого доступа: ${invV111?.key || 'нет'}`);
+await p3.evaluate(() => document.querySelector('#win [data-act="tipok"]')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })));
+ok(await tipIn('inv') === null, 'после показа обеих версий подсказок повторное открытие не показывает их снова');
 const furn = await p3.evaluate(() => window.__zavod.workerEval(`const P = g.player; g.inv.add('stone-furnace', 1); for (let d = 3; d < 12; d++) { const e = g.build('stone-furnace', Math.floor(P.x) + d, Math.floor(P.y) + 3, 0, true); if (e) return e.id; } return -1;`));
 await p3.waitForTimeout(600);
 ok(furn >= 0 && await tipIn(null, furn) === 'ent:furnace', 'печь — своя подсказка');
@@ -113,7 +117,9 @@ ok(await p3.evaluate(() => !document.querySelector('#win .tipbox') && document.g
 const seen = await p3.evaluate(() => JSON.parse(localStorage.getItem('zavod7:tips') || '[]'));
 ok(seen.includes('inv') && seen.includes('ent:furnace'), `показанные подсказки запомнены: ${seen.join(', ')}`);
 await p3.reload(); await ready(p3);
-ok(await tipIn('inv') === null, 'после перезагрузки повторно не показываются');
+ok(await tipIn('inv') === null, 'после прочтения подсказки обновления повторное открытие не показывает её снова');
+await p3.reload(); await ready(p3);
+ok(await tipIn('inv') === null, 'после перезагрузки ранее прочитанные версии подсказки не повторяются');
 await p3.evaluate(() => window.__zavod.ui.h.setSettings({ tips: false }));
 ok(await tipIn('tech') === null, 'выключены в настройках — не показываются');
 await p3.evaluate(() => { const z = window.__zavod; z.ui.close(); z.ui.toggle('settings'); const b = document.querySelector('#win [data-act="tipsreset"]'); b.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); });
@@ -130,21 +136,58 @@ const pix = await p3.evaluate(async src => { const im = new Image(); im.src = sr
 ok(pix.w === 192 && pix.h === 108 && pix.sd > 8 && pix.mean > 20, `превью 192×108 не пустое: яркость ${pix.mean.toFixed(0)}, разброс ${pix.sd.toFixed(0)} (рендер ${await p3.evaluate(() => window.__zavod.R.mode)})`);
 const old = fs.readFileSync('tests/saves/v0.2-early.z7save', 'utf8').trim();
 await p3.evaluate(async old => { const z = window.__zavod; await z.saveTo('auto1'); await z.store.put('old-v02', old); const m = JSON.parse(localStorage.getItem('zavod7:meta')); m['old-v02'] = { time: Date.now() - 864e5, tick: 1 }; localStorage.setItem('zavod7:meta', JSON.stringify(m)); z.ui.toggle('menu'); }, old);
-await p3.waitForTimeout(2000);
+await p3.locator('#win .menu-primary-actions [data-act="menu-page"][data-page="load"]').click(); await p3.waitForTimeout(1600);
 const menu = await p3.evaluate(() => { const cards = [...document.querySelectorAll('#win .savecard')]; return { n: cards.length, slots: cards.map(c => c.dataset.slot), img: cards.filter(c => c.querySelector('img.thumb')).map(c => c.dataset.slot), old: cards.find(c => c.dataset.slot === 'old-v02')?.innerText || '', meta: JSON.parse(localStorage.getItem('zavod7:meta'))['old-v02'] }; });
 ok(menu.slots.slice(0, 3).join() === '1,2,3' && menu.img.includes('1') && menu.img.includes('auto1'), `в меню карточки: ${menu.slots.join(', ')}; с картинкой: ${menu.img.join(', ')}`);
 ok(menu.meta.ents === 47 && menu.meta.era === 'v0.2' && /v0\.2/.test(menu.old) && /построек 47/.test(menu.old), `слот старой версии без сведений: прочитан из файла — ${menu.old.replace(/\s+/g, ' ').slice(0, 120)}`);
 await p3.screenshot({ path: `shots/p6-${name}-menu.png` });
-await p3.evaluate(() => { const z = window.__zavod; z.ui.h.setSettings({ lang: 'en' }); z.ui.close(); z.ui.toggle('menu'); }); await p3.waitForTimeout(400);
+await p3.evaluate(() => { const z = window.__zavod; z.ui.h.setSettings({ lang: 'en' }); z.ui.close(); z.ui.toggle('menu'); });
+await p3.locator('#win .menu-primary-actions [data-act="menu-page"][data-page="load"]').click(); await p3.waitForTimeout(400);
 const cyr = await p3.evaluate(() => (document.getElementById('win').innerText.match(/[А-Яа-яЁё][А-Яа-яЁё\s.,:—-]*/g) || []).map(s => s.trim()).filter(s => s && s !== 'Русский'));
 ok(cyr.length === 0, 'меню со слотами на английском без кириллицы' + (cyr.length ? ': ' + cyr.slice(0, 6).join(' | ') : ''));
 await p3.screenshot({ path: `shots/p6-${name}-menu-en.png` });
 await p3.evaluate(() => window.__zavod.ui.h.setSettings({ lang: 'ru' }));
 const del = await p3.evaluate(async () => { const z = window.__zavod; z.ui.h.deleteSave('old-v02'); await new Promise(r => setTimeout(r, 300)); return { s: await z.store.get('old-v02'), m: 'old-v02' in JSON.parse(localStorage.getItem('zavod7:meta')) }; });
 ok(del.s == null && !del.m, 'удаление слота: файл и карточка убраны');
-const ld = await p3.evaluate(async () => { const z = window.__zavod; const n = z.game.ents.size; z.ui.h.newGame(3, 'none'); await new Promise(r => setTimeout(r, 600)); const n0 = z.game.ents.size; z.ui.toggle('menu');
-  const img = document.querySelector('#win .savecard[data-slot="1"] [data-act="load"]'); img.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); await new Promise(r => setTimeout(r, 1000)); return { n, n0, n2: z.game.ents.size }; });
-ok(ld.n2 === ld.n && ld.n0 !== ld.n, `щелчок по картинке загружает слот (${ld.n2} построек)`);
+const ldBefore = await p3.evaluate(async () => { const z = window.__zavod; const n = z.game.ents.size; z.ui.h.newGame(3, 'none'); await new Promise(r => setTimeout(r, 600)); const n0 = z.game.ents.size; z.ui.toggle('menu'); return { n, n0 }; });
+await p3.locator('#win .menu-primary-actions [data-act="menu-page"][data-page="load"]').click();
+await p3.locator('#menu-saves .savecard[data-slot="1"] img.thumb').click(); await p3.waitForTimeout(1000);
+const ldAfter = await p3.evaluate(() => window.__zavod.game.ents.size);
+ok(ldAfter === ldBefore.n && ldBefore.n0 !== ldBefore.n, `щелчок по картинке загружает слот (${ldAfter} построек)`);
+
+// Startup restore is asynchronous: a real new-game choice made while mod startup is pending must win.
+console.log('4. Новая игра не должна быть перезаписана отложенным стартовым сохранением');
+const race = await p3.evaluate(async () => {
+  const z = window.__zavod;
+  await z.workerEval("g.inv.add('iron-plate', 77); return true;");
+  await z.saveTo('startup-race');
+  const m = JSON.parse(localStorage.getItem('zavod7:meta') || '{}');
+  m['startup-race'].time = Date.now() + 60000;
+  localStorage.setItem('zavod7:meta', JSON.stringify(m));
+  return await z.workerEval("return { seed: g.seed, tick: g.tick, iron: g.inv.count('iron-plate') };");
+});
+const chosenSeed = 987654321;
+await p3.reload();
+await p3.waitForFunction(() => !!window.__zavod?.mods?.init, null, { timeout: 300000 });
+await p3.evaluate(() => {
+  const mods = window.__zavod.mods, init = mods.init.bind(mods);
+  window.__startupModsWaiting = false;
+  window.__startupReleaseMods = null;
+  mods.init = async () => {
+    window.__startupModsWaiting = true;
+    await new Promise(resolve => { window.__startupReleaseMods = resolve; });
+    return init();
+  };
+});
+await p3.waitForFunction(() => window.__startupModsWaiting, null, { timeout: 300000 });
+await p3.keyboard.press('Escape');
+await p3.locator('.menu-primary-actions [data-act="menu-page"][data-page="new"]').click();
+await p3.locator('#seed').fill(String(chosenSeed));
+await p3.locator('[data-act="new"]').click();
+await p3.evaluate(() => window.__startupReleaseMods?.());
+await p3.waitForFunction(() => window.__zavod?.frameCost?.().n > 5 && window.__zavod?.sim?.snaps > 5 && window.__zavod?.ui?.open == null, null, { timeout: 300000 });
+const raceAfter = await p3.evaluate(() => window.__zavod.workerEval("return { seed: g.seed, tick: g.tick, iron: g.inv.count('iron-plate') };"));
+ok(raceAfter.seed === chosenSeed, `отложенное сохранение ${race.seed} не перезаписало выбранную seed ${chosenSeed} (фактически ${raceAfter.seed})`);
 await ctx3.close();
 await b.close();
 const real = errs.filter(e => !/WebGL|GPU stall|swiftshader|GL_|Software WebGL/i.test(e));

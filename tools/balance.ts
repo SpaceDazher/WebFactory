@@ -9,7 +9,7 @@ import { TECHS, SCIENCE_PACKS } from '../src/data/techs';
 import { dataHash } from './datahash';
 const RAW = new Set(['iron-ore', 'copper-ore', 'coal', 'stone', 'wood', 'crude-oil', 'water', 'petroleum-gas', 'heavy-oil', 'light-oil']);
 const by: Record<string, string> = {};
-for (const r of Object.values(RECIPES)) if (!by[r.out[0][0]]) by[r.out[0][0]] = r.id; // основной рецепт — где предмет первый выход
+for (const r of Object.values(RECIPES)) if (r.out.length && !by[r.out[0][0]]) by[r.out[0][0]] = r.id; // основной рецепт — где предмет первый выход
 for (const r of Object.values(RECIPES)) for (const [o] of r.out) if (!by[o]) by[o] = r.id;
 interface Cost { raw: Record<string, number>; s: number }
 function raw(item: string, n: number, c: Cost, depth = 0) {

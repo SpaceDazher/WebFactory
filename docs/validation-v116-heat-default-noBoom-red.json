@@ -1,0 +1,632 @@
+{
+  "status": "failed",
+  "createdAt": "2026-10-09T19:51:41.204Z",
+  "node": "v22.23.2",
+  "cpu": "12th Gen Intel(R) Core(TM) i7-12650H",
+  "stages": {
+    "hot-working": {
+      "name": "hot-working",
+      "warmTicksRequested": 300,
+      "warmTicksCompleted": 300,
+      "measuredTicksRequested": 1800,
+      "measuredTicksCompleted": 1800,
+      "startTick": 304,
+      "endTick": 2404,
+      "fullTick": {
+        "samples": 1800,
+        "p50Ms": 1.753099999999904,
+        "p95Ms": 2.495199999999386,
+        "p99Ms": 3.7843000000002576,
+        "maxMs": 151.8073000000004
+      },
+      "heat": {
+        "samples": 2100,
+        "p50Ms": 0.7984000000005835,
+        "p95Ms": 1.1886999999996988,
+        "p99Ms": 2.0448000000005777,
+        "maxMs": 5.467200000000048
+      }
+    },
+    "cooling-after-real-emergency-stop": {
+      "name": "cooling-after-real-emergency-stop",
+      "warmTicksRequested": 300,
+      "warmTicksCompleted": 300,
+      "measuredTicksRequested": 1800,
+      "measuredTicksCompleted": 1800,
+      "startTick": 2404,
+      "endTick": 4504,
+      "fullTick": {
+        "samples": 1800,
+        "p50Ms": 1.7021999999997206,
+        "p95Ms": 2.2366000000001804,
+        "p99Ms": 2.7092000000011467,
+        "maxMs": 195.6877999999997
+      },
+      "heat": {
+        "samples": 2100,
+        "p50Ms": 0.7624000000005253,
+        "p95Ms": 1.0992000000005646,
+        "p99Ms": 1.4609000000000378,
+        "maxMs": 6.04070000000047
+      }
+    },
+    "cold-isolated": {
+      "name": "cold-isolated",
+      "warmTicksRequested": 300,
+      "warmTicksCompleted": 300,
+      "measuredTicksRequested": 1800,
+      "measuredTicksCompleted": 1800,
+      "startTick": 1,
+      "endTick": 2101,
+      "fullTick": {
+        "samples": 1800,
+        "p50Ms": 0.6216000000003987,
+        "p95Ms": 0.8876000000000204,
+        "p99Ms": 1.118400000001202,
+        "maxMs": 1.829200000000128
+      },
+      "heat": {
+        "samples": 2100,
+        "p50Ms": 0.3315999999995256,
+        "p95Ms": 0.5671999999995023,
+        "p99Ms": 0.8654999999998836,
+        "maxMs": 1.7461000000002969
+      }
+    }
+  },
+  "acceptanceFailures": [
+    "split-graph-rebuild full-tick p95 exceeds 16.67 ms: 39.11880000000019",
+    "split-graph-rebuild heat p95 exceeds 2 ms: 36.15610000000015",
+    "merge-graph-rebuild full-tick p95 exceeds 16.67 ms: 39.257799999999406",
+    "merge-graph-rebuild heat p95 exceeds 2 ms: 36.84940000000097",
+    "group accident stage requires real accidents enabled"
+  ],
+  "hotFixture": {
+    "status": "building",
+    "worldBounds": {
+      "minX": -40,
+      "minY": -40,
+      "maxXExclusive": 646,
+      "maxYExclusive": 506
+    },
+    "plannedModules": 25,
+    "plannedReactors": 100,
+    "plannedCorePipes": 10000,
+    "plannedHeatExchangers": 1000,
+    "plannedTurbines": 2000
+  },
+  "preflight": {
+    "createdAt": "2026-10-09T19:51:43.289Z",
+    "node": "v22.23.2",
+    "cpu": "12th Gen Intel(R) Core(TM) i7-12650H",
+    "ticks": 304,
+    "initialFixtureTemperatureC": 550,
+    "counts": {
+      "reactors": 100,
+      "heatPipes": 12300,
+      "heatExchangers": 1000,
+      "turbines": 2000
+    },
+    "hotWorld": {
+      "bounds": {
+        "minX": -40,
+        "minY": -40,
+        "maxXExclusive": 646,
+        "maxYExclusive": 506
+      },
+      "chunks": 442,
+      "setupSeconds": 1.2847244999999998
+    },
+    "coreGrid": {
+      "rows": 100,
+      "columns": 100,
+      "pipes": 10000,
+      "internalEdges": 19800
+    },
+    "thermalNodes": 13400,
+    "heatEdges": 23200,
+    "heatConnectedExchangers": 1000,
+    "station": {
+      "modules": 25,
+      "blueprint": "station-2x2",
+      "reactors": 100,
+      "heatPipes": 2300,
+      "exchangers": 1000,
+      "pumpFedHX": 1000,
+      "steamFedHX": 1000,
+      "hxThatWorkedDuringPreflight": 1000,
+      "turbines": 2000,
+      "steamFedTurbines": 2000,
+      "poweredTurbines": 2000,
+      "turbinesWithPositiveOutputDuringPreflight": 2000,
+      "offshorePumps": 200,
+      "waterNetworks": [
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        },
+        {
+          "amount": 3500,
+          "capacity": 3500
+        }
+      ]
+    },
+    "load": {
+      "radars": 100,
+      "activeRadars": 100,
+      "turbineKW": 30080.00000000125,
+      "steamAmount": 513918.57044675865,
+      "steamJ": 50000000000,
+      "powerNetworks": [
+        {
+          "id": 29596,
+          "radars": 100,
+          "activeRadars": 100,
+          "demandKW": 30080,
+          "supplyKW": 11640000,
+          "satisfaction": 1,
+          "poles": 800,
+          "steamKW": 30080
+        }
+      ],
+      "unpoweredRadars": []
+    },
+    "maxReactorC": 579.0866864,
+    "booms": 0,
+    "zones": 0,
+    "elapsed": "preflight-only; no latency measurements"
+  },
+  "setupSeconds": 1.2847244999999998,
+  "hotWorldBounds": {
+    "minX": -40,
+    "minY": -40,
+    "maxXExclusive": 646,
+    "maxYExclusive": 506
+  },
+  "hotWorldChunks": 442,
+  "lastCompletedTick": 2101,
+  "graphRebuildProgress": {
+    "cyclesCompleted": 30,
+    "heatEdgesBaseline": 23200,
+    "splitFullTick": {
+      "samples": 30,
+      "p50Ms": 26.322400000000926,
+      "p95Ms": 39.11880000000019,
+      "p99Ms": 41.293900000000576,
+      "maxMs": 41.293900000000576
+    },
+    "splitHeat": {
+      "samples": 30,
+      "p50Ms": 23.592800000000352,
+      "p95Ms": 36.15610000000015,
+      "p99Ms": 38.40350000000035,
+      "maxMs": 38.40350000000035
+    },
+    "mergeFullTick": {
+      "samples": 30,
+      "p50Ms": 26.961199999999735,
+      "p95Ms": 39.257799999999406,
+      "p99Ms": 43.672200000000885,
+      "maxMs": 43.672200000000885
+    },
+    "mergeHeat": {
+      "samples": 30,
+      "p50Ms": 24.310699999999997,
+      "p95Ms": 36.84940000000097,
+      "p99Ms": 40.7573999999986,
+      "maxMs": 40.7573999999986
+    }
+  },
+  "lastError": "group accident stage requires real accidents enabled",
+  "coldFixture": {
+    "status": "built",
+    "worldBounds": {
+      "minX": -10,
+      "minY": -10,
+      "maxXExclusive": 670,
+      "maxYExclusive": 660
+    },
+    "chunks": 508,
+    "buildSeconds": 1.0946594000000005,
+    "counts": {
+      "reactors": 100,
+      "heatPipes": 13096,
+      "heatExchangers": 1000,
+      "turbines": 2000
+    },
+    "thermalNodes": 14196,
+    "heatEdges": 0
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "werift",
+  "version": "0.25.1",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "dist": {
+    "shasum": "aa32b0855039fa16ed3c4cd9822d52fbffddb6ca",
+    "tarball": "https://registry.npmjs.org/werift/-/werift-0.25.1.tgz",
+    "fileCount": 759,
+    "integrity": "sha512-S46MVcqeSKKoOrQJI2mRkVB2oCmsYzTEs6S86BBgZ5YIZtAf7uAhO8XedBl/Jp6pYUt8aXfLuAYpcxSzMpxTMA==",
+    "signatures": [
+      {
+        "sig": "MEUCIEbdR/UbE1J2tatskvlvsV2UCS7Ir59owtO6JCoE2l6cAiEA8lrecEa5w/hfYAGvRIdU56I7m19cHYmvZfxPRinKpGs=",
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      },
+      {
+        "sig": "MEUCIFhDWbCs4dfJ7r1EeC8v8eiJ0ZIeGaP++TPZMvn4jDDxAiEAh0hcbSCGzSNS47NMrTplg/7R6vB6VG8klNQD+6uHeZc=",
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      }
+    ],
+    "unpackedSize": 6352851
+  }
+}

@@ -7,6 +7,7 @@ import { ledger } from '../src/sim/compat';
 import { makeBlueprint, rotateBp, flipBp, bpCost, validBp } from '../src/sim/blueprint';
 import { RECIPES } from '../src/data/recipes';
 import { PROTOS, FLOORS } from '../src/data/entities';
+import { ITEMS } from '../src/data/items';
 import { END_STOP } from '../src/sim/belts';
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? '  ✔ ' : '  ✘ ') + m); if (!c) fails++; };
@@ -24,6 +25,73 @@ const run = (g: Game, ticks: number, until?: () => boolean) => { for (let i = 0;
 const total = (g: Game) => { const l = ledger(serialize(g)); const m: Record<string, number> = { ...l.items }; for (const k in l.ents) m[k] = (m[k] || 0) + l.ents[k]; return m; };
 const beltLine = (g: Game, x: number, y: number, n: number, proto = 'transport-belt') => { const r: Entity[] = []; for (let i = 0; i < n; i++) r.push(g.build(proto, x + i, y, 1, false)!); return r; };
 const onBelt = (es: Entity[]) => { let items = 0, stacks: number[] = []; for (const e of es) for (const s of e.lanes!) for (const l of s) for (const it of l) { items += it.n; stacks.push(it.n); } return { items, stacks }; };
+
+console.log('0. Ограничение ячеек сундука и личные ячейки для удаления');
+{
+  const g = fresh(); const A = land(g, 80, 80, 8, 4); const chest = g.build('wooden-chest', A.x, A.y, 0, false)!;
+  const st = ITEMS['iron-plate'].stack; chest.inv!.add('iron-plate', st * 2); chest.inv!.add('copper-plate', 7);
+  g.enqueue({ t: 'slotLimit', id: chest.id, limit: 1 } as any); g.step();
+  ok((chest.inv as any).slotLimit === 1, 'сундук ограничен одной ячейкой');
+  ok(chest.inv!.count('iron-plate') === st * 2 && chest.inv!.count('copper-plate') === 7, 'содержимое заблокированных ячеек сохранено');
+  ok(chest.inv!.spaceFor('iron-plate') === 0 && chest.inv!.add('iron-plate', 1) === 1 && g.insertItem(chest, 'steel-plate', 3, true) === 0, 'автоподача и манипулятор не заполняют заблокированные ячейки');
+  g.held = { item: 'steel-plate', count: 1 }; g.enqueue({ t: 'hand', op: 'drop', to: 'ent', id: chest.id, slot: 'chest:1' }); g.step();
+  ok(g.held?.count === 1 && chest.inv!.slots[1]?.item === 'iron-plate', 'ручной перенос в заблокированную ячейку сохраняет предмет в руке'); g.held = null;
+  g.enqueue({ t: 'slotLimit', id: chest.id, limit: 1.5 } as any); g.step(); g.enqueue({ t: 'slotLimit', id: chest.id, limit: 0 } as any); g.step();
+  ok((chest.inv as any).slotLimit === 1, 'дробный и нулевой лимиты не меняют доступные ячейки');
+  const lockedIron = chest.inv!.slots[1] && { ...chest.inv!.slots[1]! }, lockedCopper = chest.inv!.slots[2] && { ...chest.inv!.slots[2]! };
+  g.enqueue({ t: 'sortInv', id: chest.id }); g.step();
+  ok(chest.inv!.count('iron-plate') === st * 2 && chest.inv!.count('copper-plate') === 7 && JSON.stringify(chest.inv!.slots[1]) === JSON.stringify(lockedIron) && JSON.stringify(chest.inv!.slots[2]) === JSON.stringify(lockedCopper), 'сортировка не перемещает и не теряет заблокированные предметы');
+  g.enqueue({ t: 'slotLimit', id: chest.id, limit: 4 } as any); g.step();
+  ok((chest.inv as any).slotLimit === 4 && chest.inv!.spaceFor('steel-plate') === ITEMS['steel-plate'].stack, 'после увеличения лимита доступна одна новая ячейка');
+  const loaded = deserialize(JSON.parse(JSON.stringify(serialize(g)))); const wc = loaded.ents.get(chest.id)!;
+  ok((wc.inv as any).slotLimit === 4 && wc.inv!.count('copper-plate') === 7, 'лимит и заблокированные стопки переживают сохранение');
+  const legacy = JSON.parse(JSON.stringify(serialize(g))); delete legacy.ents.find((e: any) => e.id === chest.id).slotLimit;
+  const oldChest = deserialize(legacy).ents.get(chest.id)!;
+  ok((oldChest.inv as any).slotLimit === oldChest.inv!.size, 'старое сохранение без лимита загружает все ячейки');
+  const upgradeGame = deserialize(JSON.parse(JSON.stringify(serialize(g)))); const upgradeChest = upgradeGame.ents.get(chest.id)!;
+  upgradeGame.fastReplace(upgradeChest, 'iron-chest', upgradeChest.dir, false);
+  ok((upgradeChest.inv as any).slotLimit === 4 && upgradeChest.inv!.count('copper-plate') === 7, 'ручной лимит и запас сохраняются при улучшении сундука');
+
+  const p = fresh(); p.inv.add('iron-plate', 20);
+  p.enqueue({ t: 'hand', op: 'pick', from: 'inv', i: 0, n: 'half' }); p.step();
+  p.enqueue({ t: 'hand', op: 'drop', to: 'trash', i: 3, n: 'all' } as any); p.step();
+  ok((p as any).trash?.slots.length === 8 && (p as any).trash?.slots[3]?.count === 10 && p.inv.count('iron-plate') === 10 && !p.held, 'половина стопки перемещается из основного инвентаря в одну из восьми ячеек');
+  p.enqueue({ t: 'hand', op: 'pick', from: 'trash', i: 3, n: 'one' } as any); p.step();
+  p.enqueue({ t: 'hand', op: 'drop', to: 'inv', i: 1, n: 'all' }); p.step();
+  ok((p as any).trash?.slots[3]?.count === 9 && p.inv.count('iron-plate') === 11, 'частичный перенос из корзины в инвентарь сохраняет общий счёт');
+  p.held = { item: 'copper-plate', count: 7 };
+  p.enqueue({ t: 'hand', op: 'drop', to: 'trash', i: 99 } as any); p.step();
+  ok(p.held?.item === 'copper-plate' && p.held.count === 7, 'недопустимый индекс не теряет стопку в руке');
+  p.enqueue({ t: 'hand', op: 'drop', to: 'trash', i: 1.5 } as any); p.step();
+  ok(p.held?.item === 'copper-plate' && p.held.count === 7, 'дробный индекс не теряет стопку в руке');
+  p.addPeer('Игрок 2', '#3a8fd8'); p.usePl(1); const secondTrash = (p as any).trash; if (secondTrash) secondTrash.slots[0] = { item: 'stone', count: 4 }; p.inv.add('iron-plate', 5);
+  p.enqueue({ t: 'trashClear', pl: 1 } as any); p.usePl(0); p.step();
+  ok((p as any).trash?.slots[3]?.count === 9 && (p as any).held?.count === 7 && p.inv.count('iron-plate') === 11 && (p.peers[1] as any).trash?.isEmpty() && p.peers[1].inv.count('iron-plate') === 5, 'удаление корзины игрока 2 не трогает корзину, руку или инвентарь игрока 1');
+  p.usePl(1); if ((p as any).trash) (p as any).trash.slots[0] = { item: 'stone', count: 4 }; p.usePl(0);
+  const heldBefore = p.peers[1].held;
+  const saved = deserialize(JSON.parse(JSON.stringify(serialize(p))));
+  ok((saved as any).trash?.slots.length === 8 && (saved.peers[1] as any).trash?.slots[0]?.item === 'stone' && JSON.stringify(saved.peers[1].held) === JSON.stringify(heldBefore), 'ячейки для удаления и рука каждого игрока сохраняются отдельно');
+  const oldSave = JSON.parse(JSON.stringify(serialize(p))); delete oldSave.trash; for (const peer of oldSave.peers || []) delete peer.trash;
+  const oldGame = deserialize(oldSave);
+  ok((oldGame as any).trash?.slots.length === 8 && oldGame.peers.every(peer => (peer as any).trash?.slots.length === 8), 'старое сохранение создаёт пустые ячейки для каждого игрока');
+
+  const full = fresh(); full.trash.slots[2] = { item: 'iron-plate', count: ITEMS['iron-plate'].stack }; full.held = { item: 'iron-plate', count: 1 };
+  full.enqueue({ t: 'hand', op: 'drop', to: 'trash', i: 2, n: 'all' } as any); full.step();
+  ok(full.trash.slots[2]?.count === ITEMS['iron-plate'].stack && full.held?.count === 1, 'полная ячейка корзины оставляет переносимый предмет в руке');
+
+  const partial = fresh(); partial.inv.slots[0] = { item: 'iron-plate', count: 10 }; partial.inv.slots[1] = { item: 'iron-plate', count: 5 };
+  partial.enqueue({ t: 'hand', op: 'pick', from: 'inv', i: 0, n: 'half' }); partial.step();
+  ok(partial.held?.count === 5 && partial.inv.slots[0]?.count === 5 && partial.inv.slots[1]?.count === 5, 'частичный перенос берёт предметы только из выбранной стопки');
+
+  const dead = fresh(); dead.inv.add('iron-plate', 12); dead.held = { item: 'copper-plate', count: 3 }; dead.trash.slots[0] = { item: 'stone', count: 4 };
+  dead.hurtPlayer(1000, true); const body = dead.corpses[dead.corpses.length - 1];
+  const bodyItems = () => body.slots.filter(Boolean).reduce((a: Record<string, number>, s: any) => (a[s.item] = (a[s.item] || 0) + s.count, a), {});
+  const carried = bodyItems();
+  ok(carried['iron-plate'] === 12 && carried['copper-plate'] === 3 && carried.stone === 4 && dead.inv.isEmpty() && dead.trash.isEmpty() && !dead.held, 'гибель переносит основной инвентарь, руку и корзину в тело без потери');
+  dead.player.respawn = 1; (dead as any).stepCombatPlayer();
+  const afterRespawn = bodyItems();
+  ok(!dead.player.dead && afterRespawn['iron-plate'] === 12 && afterRespawn['copper-plate'] === 3 && afterRespawn.stone === 4 && !dead.inv.count('iron-plate') && !dead.trash.count('stone'), 'возрождение не дублирует и не стирает содержимое тела');
+}
 
 console.log('1. Пропускная способность: стопки по 4 — ровно в 4 раза больше');
 {
@@ -217,7 +285,7 @@ console.log('9. Рецепты и технологии v1.4');
   const w = Object.fromEntries(RECIPES['warehouse'].in); ok(w['steel-plate'] === 20 && w['stone-brick'] === 50 && w['advanced-circuit'] === 10, 'склад: 20 стали, 50 кирпича, 10 продвинутых схем');
   const si = Object.fromEntries(RECIPES['stack-inserter'].in); ok(si['electronic-circuit'] === 15 && si['advanced-circuit'] === 15 && si['fast-inserter'] === 1, 'стопочный манипулятор: 15 схем, 15 продвинутых, 1 быстрый');
   ok(PROTOS['stack-inserter'].rot === 2.31 && PROTOS['stack-inserter'].energy!.kW === 133, 'стопочный: 2,31 об/с, 133 кВт');
-  ok(FLOORS.map(f => f.speed).join(',') === '0.3,0.4,0.5', 'покрытия: +30%, +40%, +50%');
+  ok(FLOORS.slice(0, 3).map(f => f.speed).join(',') === '0.3,0.4,0.5', 'покрытия: +30%, +40%, +50% (v1.14: дальше — насыпь и декоративные)');
 }
 
 console.log(fails ? `\n✘ Хранение и покрытия: провалов ${fails}` : '\n✔ Хранение и покрытия: всё в порядке');

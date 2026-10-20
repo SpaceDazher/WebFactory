@@ -34,8 +34,8 @@ export class EntMap extends Map<number, Entity> {
 }
 
 /** типы построек, у которых есть логика тика (switch в Game.step) */
-export const TICK_TYPES = new Set(['pumpjack', 'turret', 'lamp', 'pump', 'tpump', 'boiler', 'drill', 'furnace', 'assembler', 'lab', 'inserter', 'belt', 'underground', 'splitter', 'engine', 'solar', 'silo', 'radar', 'arith', 'decider', 'beacon', 'accumulator']);
-const ticks = (e: Entity) => TICK_TYPES.has(e.t) || !!PROTOS[e.proto]?.pollution;
+export const TICK_TYPES = new Set(['car', 'pumpjack', 'turret', 'lamp', 'pump', 'tpump', 'boiler', 'reactor', 'hexch', 'hpipe', 'drill', 'furnace', 'assembler', 'lab', 'inserter', 'belt', 'underground', 'splitter', 'engine', 'solar', 'silo', 'radar', 'arith', 'decider', 'beacon', 'accumulator', 'gate', 'flare']);
+const ticks = (e: Entity) => TICK_TYPES.has(e.t) || !!PROTOS[e.proto]?.pollution || !!PROTOS[e.proto]?.regen;
 
 /** плотный список построек с логикой тика — в порядке Map (порядок обхода не меняется, результат тот же) */
 export function tickList(g: Game): Entity[] {
@@ -54,9 +54,9 @@ export function powerList(g: Game): Entity[] {
 
 // ---------- профайлер ----------
 /** подсистемы тика (строки F3) */
-export const SUBS = ['cmd', 'player', 'power', 'robots', 'ents', 'trains', 'circuits', 'enemies', 'stats'] as const;
+export const SUBS = ['cmd', 'player', 'power', 'heat', 'robots', 'ents', 'trains', 'circuits', 'enemies', 'stats'] as const;
 export type Sub = typeof SUBS[number];
-export const SUB_NAMES: Record<string, string> = { cmd: 'команды', player: 'инженер и стройка', power: 'электросети', robots: 'роботы', ents: 'постройки', trains: 'поезда', circuits: 'схемотехника', enemies: 'Рой', stats: 'статистика',
+export const SUB_NAMES: Record<string, string> = { cmd: 'команды', player: 'инженер и стройка', power: 'электросети', heat: 'тепловая сеть', robots: 'роботы', ents: 'постройки', trains: 'поезда', circuits: 'схемотехника', enemies: 'Рой', stats: 'статистика',
   belts: 'конвейеры', machines: 'машины', inserters: 'манипуляторы', other: 'прочие постройки' };
 export type Group = 'belts' | 'machines' | 'inserters' | 'other';
 export const subOf = (t: string): Group => t === 'belt' || t === 'underground' || t === 'splitter' ? 'belts' : t === 'inserter' ? 'inserters'

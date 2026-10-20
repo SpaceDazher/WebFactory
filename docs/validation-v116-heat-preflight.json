@@ -1,0 +1,473 @@
+{
+  "createdAt": "2026-10-12T12:12:04.444Z",
+  "node": "v24.14.1",
+  "cpu": "Intel(R) Xeon(R) Processor @ 2.90GHz",
+  "ticks": 304,
+  "initialFixtureTemperatureC": 550,
+  "counts": {
+    "reactors": 100,
+    "heatPipes": 12300,
+    "heatExchangers": 1000,
+    "turbines": 2000
+  },
+  "hotWorld": {
+    "bounds": {
+      "minX": -40,
+      "minY": -40,
+      "maxXExclusive": 646,
+      "maxYExclusive": 506
+    },
+    "chunks": 442,
+    "setupSeconds": 1.8578870350000003
+  },
+  "coreGrid": {
+    "rows": 100,
+    "columns": 100,
+    "pipes": 10000,
+    "internalEdges": 19800
+  },
+  "thermalNodes": 13400,
+  "heatEdges": 23200,
+  "heatConnectedExchangers": 1000,
+  "station": {
+    "modules": 25,
+    "blueprint": "station-2x2",
+    "reactors": 100,
+    "heatPipes": 2300,
+    "exchangers": 1000,
+    "pumpFedHX": 1000,
+    "steamFedHX": 1000,
+    "hxThatWorkedDuringPreflight": 1000,
+    "turbines": 2000,
+    "steamFedTurbines": 2000,
+    "poweredTurbines": 2000,
+    "turbinesWithPositiveOutputDuringPreflight": 2000,
+    "offshorePumps": 200,
+    "waterNetworks": [
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      },
+      {
+        "amount": 3500,
+        "capacity": 3500
+      }
+    ]
+  },
+  "load": {
+    "radars": 100,
+    "activeRadars": 100,
+    "turbineKW": 30080.00000000125,
+    "steamAmount": 513918.57044675865,
+    "steamJ": 50000000000,
+    "powerNetworks": [
+      {
+        "id": 29596,
+        "radars": 100,
+        "activeRadars": 100,
+        "demandKW": 30080,
+        "supplyKW": 11640000,
+        "satisfaction": 1,
+        "poles": 800,
+        "steamKW": 30080
+      }
+    ],
+    "unpoweredRadars": []
+  },
+  "maxReactorC": 579.0866864,
+  "booms": 0,
+  "zones": 0,
+  "elapsed": "preflight-only; no latency measurements"
+}

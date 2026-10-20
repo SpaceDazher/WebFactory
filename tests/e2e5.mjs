@@ -1,12 +1,12 @@
 // E2E M8–M9: поздняя база (модули, маяки, Сборщик 3, электропечи, аккумуляторы, подстанции, радар),
 // ракетная шахта и запуск, чертежи/призраки/снос/улучшение, окна технологий, статистики, библиотеки.
-import { chromium } from 'playwright';
-const b = await chromium.launch({ executablePath: '/usr/local/bin/chromium', args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--use-gl=angle'] });
+import { launchBrowser, selectedBrowser, appUrl, projectRoot } from './browser.mjs';
+const b = await launchBrowser(selectedBrowser(), { args: ['--enable-unsafe-swiftshader', '--use-gl=angle'] });
 const p = await b.newPage({ viewport: { width: 1600, height: 900 }, locale: 'ru-RU' });
 const errs = [];
 p.on('pageerror', e => errs.push('PAGEERROR ' + e.message + '\n' + e.stack));
 p.on('console', m => { if (m.type() === 'error') errs.push('CONSOLE ' + m.text()); });
-await p.goto('file:///data/game/dist/index.html?local=1');
+await p.goto(appUrl(import.meta.url, '?local=1'));
 await p.waitForFunction(() => window.__texMs != null, null, { timeout: 180000 });
 await p.waitForTimeout(300);
 await p.keyboard.press('Escape');

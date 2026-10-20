@@ -86,6 +86,15 @@ console.log('проверка прототипов: понятные ошибк�
   r = applyMods([typ]); t = allErr(r)[0] || ''; ok(/не может добавить постройку типа «loco»/.test(t), 'новые типы логики нельзя: ' + t.slice(0, 120));
   const ref = mk({ name: 'ref' }, { 'r.json': [{ op: 'add', type: 'recipe', id: 'r1', in: [['unobtainium', 1]], out: [['iron-plate', 1]], time: 1, cat: 'crafting', hand: true, enabled: true }] });
   r = applyMods([ref]); t = allErr(r)[0] || ''; ok(/поле in\[0\]: нет предмета «unobtainium»/.test(t), 'ссылка на несуществующий предмет: ' + t);
+  const disposal = mk({ name: 'disposal' }, { 'r.json': [{ op: 'add', type: 'recipe', id: 'mod-disposal', in: [['stone', 1]], out: [], time: 1, cat: 'bioprocessing', hand: false, enabled: true, prod: false }] });
+  r = applyMods([disposal]); ok(!r.failed.length && RECIPES['mod-disposal']?.out.length === 0, 'non-hand bio-processing waste disposal may have a real input and no item output');
+  applyMods([]);
+  const fakeDisposal = mk({ name: 'fake-disposal' }, { 'r.json': [{ op: 'add', type: 'recipe', id: 'fake-disposal', in: [['stone', 1]], out: [], time: 1, cat: 'crafting', hand: false, enabled: true, prod: false }] });
+  r = applyMods([fakeDisposal]); ok(r.failed.length === 1 && /рецепт ничего не производит/.test(allErr(r)[0]), 'zero-output recipes remain restricted to bounded biomaterial disposal'); applyMods([]);
+  const recursiveBio = mk({ name: 'recursive-bio' }, { 'r.json': [{ op: 'patch', type: 'item', id: 'bio-coated-armored-ii-firearm-magazine', set: { bioCoating: { source: 'bio-coated-armored-ii-firearm-magazine' } } }] });
+  r = applyMods([recursiveBio]); ok(r.failed.length === 1 && /bioCoating.source/.test(allErr(r)[0]), 'recursive biomaterial sources are rejected before rendering'); applyMods([]);
+  const hugeLining = mk({ name: 'huge-lining' }, { 'r.json': [{ op: 'patch', type: 'item', id: 'bio-lining-crawler-iv-equipment', set: { bioLining: { amount: 1 } } }] });
+  r = applyMods([hugeLining]); ok(r.failed.length === 1 && /bioLining/.test(allErr(r)[0]), 'lining parameters are bounded at the mod input boundary'); applyMods([]);
   const js = mk({ name: 'js' }, { 'x.json': '[{ "op": "patch",\n  "type": "item" "id": 1 }]' });
   r = applyMods([js]); t = allErr(r)[0] || ''; ok(/файл prototypes\/x\.json: ошибка JSON \(строка 2/.test(t), 'синтаксис JSON со строкой и столбцом: ' + t.slice(0, 90));
   const dup = mk({ name: 'dup' }, { 'x.json': [{ op: 'add', type: 'item', id: 'iron-plate', name: 'X' }] }); r = applyMods([dup]); ok(/уже есть в игре — для изменения используйте "op": "patch"/.test(allErr(r)[0]), 'add существующего — подсказка про patch');
@@ -150,7 +159,7 @@ let saveWithMods: any;
   ok(g.inv.count('iron-gear-wheel') >= 6, `ручной крафт по рецепту мода: шестерён ${g.inv.count('iron-gear-wheel')}`);
   g.research.done.add('steel-processing'); for (const u of TECHS['steel-processing'].unlocks) g.enabled.add(u); g.enqueue({ t: 'research', tech: 'crates' }); g.step(); ok(g.research.current === 'crates', 'технология мода выбирается');
   const s = serialize(g); saveWithMods = JSON.parse(JSON.stringify(s));
-  ok(s.v === SAVE_VERSION && SAVE_VERSION === 14 && s.mods.length === 3 && s.mods.every((m: any) => m.hash && m.version), 'сохранение v14 помнит моды (имя, версия, отпечаток)');
+  ok(s.v === SAVE_VERSION && SAVE_VERSION >= 14 && s.mods.length === 3 && s.mods.every((m: any) => m.hash && m.version), 'сохранение v14+ помнит моды (имя, версия, отпечаток)');
   const g2 = deserialize(JSON.parse(JSON.stringify(s))); ok(stateHash(g2) === stateHash(g) && !g2.loadReport?.modsMissing && reportText(g2.loadReport, SAVE_VERSION) === null, 'с теми же модами открывается без потерь');
   for (let i = 0; i < 120; i++) { g.step(); g2.step(); } ok(stateHash(g2) === stateHash(g), 'и идёт так же (детерминизм после загрузки)');
   const a = runGame(11, 400), b = runGame(11, 400); ok(stateHash(a) === stateHash(b), 'две партии с модами — одинаковы');
@@ -173,7 +182,7 @@ let saveWithMods: any;
   // включить нужные (те же моды) — открывается как было
   applyMods(pk); const g4 = deserialize(JSON.parse(JSON.stringify(saveWithMods))); ok(!g4.loadReport?.modsMissing && [...g4.ents.values()].some(e => e.proto === 'crate'), '«Включить нужные» — всё на месте');
   // миграция 13 → 14
-  const old = JSON.parse(JSON.stringify(saveWithMods)); old.v = 13; delete old.mods; const m = migrate(old); ok(m.v === 14 && Array.isArray(m.mods) && m.mods.length === 0, 'миграция 13 → 14: mods: []');
+  const old = JSON.parse(JSON.stringify(saveWithMods)); old.v = 13; delete old.mods; const m = migrate(old); ok(m.v === SAVE_VERSION && Array.isArray(m.mods) && m.mods.length === 0, 'миграция 13 → 14: mods: []');
   ok(activeMods().length === 3 && lastApply()!.loaded.length === 3, 'активные моды');
 }
 console.log('пакет модов (zip с modpack.json) и архивы примеров');

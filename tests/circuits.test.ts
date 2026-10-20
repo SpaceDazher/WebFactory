@@ -5,7 +5,8 @@
 import { Game, Entity } from '../src/sim/game';
 import { serialize, deserialize, stateHash, migrate, SAVE_VERSION } from '../src/sim/save';
 import { makeBlueprint, rotateBp, validBp } from '../src/sim/blueprint';
-import { rebuildCircuits, sigValue, WIRE_REACH } from '../src/sim/circuits';
+import { addWire, rebuildCircuits, sigValue, WIRE_REACH } from '../src/sim/circuits';
+import { PROTOS } from '../src/data/entities';
 import { RECIPES } from '../src/data/recipes';
 import { TECHS } from '../src/data/techs';
 import { T_SHALLOW } from '../src/sim/world';
@@ -234,6 +235,39 @@ console.log('10. Данные: рецепты, технология');
   ok(JSON.stringify(R['constant-combinator'].in) === JSON.stringify([['copper-cable', 5], ['electronic-circuit', 2]]), 'комбинатор: 5 медных проводов + 2 эл. схемы');
   ok(JSON.stringify(R['small-lamp'].in) === JSON.stringify([['electronic-circuit', 1], ['copper-cable', 3], ['iron-plate', 1]]), 'лампа: 1 эл. схема, 3 медных провода, 1 жел. плита');
   const t = TECHS['circuit-network']; ok(!!t && t.packs.length === 2 && ['red-wire', 'green-wire', 'constant-combinator'].every(u => t.unlocks.includes(u)), '«Схемотехника»: красная + зелёная наука, открывает провода и комбинатор');
+}
+
+console.log('Большие опоры: сигнальные провода на полном расстоянии электропередачи');
+for (const color of [0, 1] as const) for (const [dx, dy] of [[30, 0], [0, 30], [18, 24]]) {
+  const g = fresh(); const area = land(g, 800, 800, 40, 40);
+  const a = g.build('big-electric-pole', area.x + 2, area.y + 4, 0, false)!;
+  const b = g.build('big-electric-pole', a.x + dx, a.y + dy, 0, false)!;
+  const source = g.build('constant-combinator', a.x, a.y - 3, 0, false)!;
+  const item = color ? 'green-wire' : 'red-wire';
+  ok(!!a && !!b && !!source, 'опоры и источник сигнала построены');
+  ok(PROTOS['big-electric-pole'].wire === 30, 'максимальное расстояние больших опор — 30 клеток');
+  wire(g, a, b, color);
+  ok(g.cw.length === 1 && g.inv.count(item) === 0 && netOf(g, a, color) === netOf(g, b, color),
+    `${item}: соединение на 30 клетках (${dx},${dy}) расходует один провод`);
+  ok(addWire(g, a.id, b.id, color) === 'exists', 'прямое соединение использует тот же предел');
+  cset(g, source, { sig: [{ s: 'signal-A', n: 7 }] }); wire(g, source, a, color); run(g, 2);
+  ok(sigValue(g, b, 'signal-A') === 7, 'сигнал доходит до дальней опоры');
+  const bp = makeBlueprint(g, area.x, area.y, area.x + 39, area.y + 39)!;
+  ok(!!bp && bp.wires?.length === 2 && validBp(JSON.parse(JSON.stringify(bp))),
+    'чертёж сохраняет длинное соединение и подключение источника');
+  const loaded = deserialize(serialize(g)); const restored = loaded.ents.get(b.id)!;
+  run(loaded, 2);
+  ok(loaded.cw.length === 2 && sigValue(loaded, restored, 'signal-A') === 7,
+    'длинный провод и передача сигнала сохраняются после загрузки');
+}
+for (const color of [0, 1] as const) {
+  const g = fresh(); const area = land(g, 900, 900, 40, 8);
+  const a = g.build('big-electric-pole', area.x, area.y, 0, false)!;
+  const b = g.build('big-electric-pole', area.x + 31, area.y, 0, false)!;
+  const item = color ? 'green-wire' : 'red-wire';
+  ok(addWire(g, a.id, b.id, color) === 'far', '31 клетка превышает дальность прямого соединения');
+  g.inv.add(item, 1); g.enqueue({ t: 'cwire', a: a.id, b: b.id, c: color }); g.step();
+  ok(g.cw.length === 0 && g.inv.count(item) === 1, `${item}: отказ за пределом не расходует предмет`);
 }
 
 console.log(fails ? `\n✘ Схемотехника: провалов ${fails}` : '\n✔ Схемотехника: всё в порядке');

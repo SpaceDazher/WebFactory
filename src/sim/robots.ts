@@ -2,9 +2,11 @@
 // Логистические роботы (v1.3): доставка между логистическими сундуками, запросы, личные запросы и мусор инженера.
 // Всё детерминировано: обход — по массивам в порядке создания или по id, без неупорядоченных коллекций.
 // Роботы в робопорту — предметы в его ячейках; в полёте — объекты g.robots (сохраняются вместе с грузом и задачей).
+import { dismantleBlock } from './heat';
 import type { Game, Entity, Ghost } from './game';
-import { Stack } from './inventory';
+import { Inventory, type Stack } from './inventory';
 import { PROTOS, FLOOR_BY_ITEM } from '../data/entities';
+import { kitStats } from './combat';
 import { ITEMS } from '../data/items';
 import { TECHS } from '../data/techs';
 import { tkey } from '../core/types';
@@ -85,18 +87,24 @@ export function roboIndex(g: Game): RoboIndex { if (!g.robo || g.roboDirty) { g.
 /** сеть, в зону стройки (оранжевую) которой попадает точка */
 export function netAt(g: Game, x: number, y: number): RoboNet | null { const I = roboIndex(g); const p = portAt(I.grid, x, y, 'cz'); return p ? I.netOf.get(p.id)! : null; }
 /** личный робопорт надет и инженер жив */
-export function personal(g: Game) { const d = g.equip ? ITEMS[g.equip]?.equip : undefined; return d && d.kind === 'roboport' && !g.player.dead ? d : null; }
+export function personal(g: Game) {
+  if (g.player.dead) return null;
+  const k = g.player.kit; const kr = k?.armor ? kitStats(k).robo : null; // v1.14: робопорты в сетке модульной брони
+  const d = g.equip ? ITEMS[g.equip]?.equip : undefined; const dd = d && d.kind === 'roboport' ? d : null;
+  if (kr && dd) return { ...kr, zone: Math.max(kr.zone, dd.zone), robots: kr.robots + dd.robots };
+  return kr || dd;
+}
 export function inPersonal(g: Game, x: number, y: number) { const d = personal(g); return !!d && Math.abs(x - g.player.x) <= d.zone / 2 && Math.abs(y - g.player.y) <= d.zone / 2; }
 const playerIn = (g: Game, net: RoboNet) => { if (g.player.dead) return false; if (g.pl) return netAt(g, g.player.x, g.player.y) === net; const c = tc(g); if (c.pnet === undefined) c.pnet = netAt(g, g.player.x, g.player.y); return c.pnet === net; };
 
 // ---------- склад сети: предметы в сундуках и роботы в робопортах (кэш на тик) ----------
-interface TickCache { tick: number; items: Map<RoboNet, Map<string, number>>; robots: Map<RoboNet, number>; lrobots: Map<RoboNet, number>; idle: Map<RoboNet, Robot[]> | null; lidle: Map<RoboNet, Robot[]> | null; pnet: RoboNet | null | undefined;
+interface TickCache { tick: number; pl: number; items: Map<RoboNet, Map<string, number>>; robots: Map<RoboNet, number>; lrobots: Map<RoboNet, number>; idle: Map<RoboNet, Robot[]> | null; lidle: Map<RoboNet, Robot[]> | null; pnet: RoboNet | null | undefined;
   /** v1.3: обещания — сколько предметов у сундука уже «забронировано» летящими роботами (out) и сколько к нему летит (inc); пересчёт по роботам */
-  prom: { out: Map<number, Map<string, number>>; inc: Map<number, Map<string, number>>; incAll: Map<number, number> } | null; }
-const emptyCache = (tick: number): TickCache => ({ tick, items: new Map(), robots: new Map(), lrobots: new Map(), idle: null, lidle: null, pnet: undefined, prom: null });
+  prom: { out: Map<number, Map<string, number>>; inc: Map<number, Map<string, number>>; shadows: Map<number, Inventory | null> } | null; }
+const emptyCache = (tick: number, pl = 0): TickCache => ({ tick, pl, items: new Map(), robots: new Map(), lrobots: new Map(), idle: null, lidle: null, pnet: undefined, prom: null });
 let cache: TickCache = emptyCache(-1);
 let cacheGame: Game | null = null;
-function tc(g: Game): TickCache { if (cache.tick !== g.tick || cacheGame !== g || (cache.idle || cache.lidle) && g.robo && cacheIdx !== g.robo) { cache = emptyCache(g.tick); cacheGame = g; cacheIdx = g.robo; } return cache; }
+function tc(g: Game): TickCache { if (cache.tick !== g.tick || cache.pl !== g.pl || cacheGame !== g || (cache.idle || cache.lidle) && g.robo && cacheIdx !== g.robo) { cache = emptyCache(g.tick, g.pl); cacheGame = g; cacheIdx = g.robo; } return cache; }
 let cacheIdx: RoboIndex | null = null;
 /** свободные роботы в полёте по сетям (кэш на тик; назначенные отфильтровываются при выборе) */
 function idleOf(g: Game, n: RoboNet, lg = false): Robot[] {
@@ -141,10 +149,10 @@ function hasItem(g: Game, n: RoboNet, item: string) {
 const TIER: Record<string, number> = { active: 0, buffer: 1, passive: 2, storage: 2, requester: 9 };
 /** сундук хранения для предмета: с фильтром на него → где он уже лежит → пустой без фильтра (ближайший в своей группе) */
 function storeDest(g: Game, n: RoboNet, item: string, x: number, y: number): Entity | null {
-  const P = prom(g); let best: Entity | null = null, bt = 9, bd = Infinity;
+  let best: Entity | null = null, bt = 9, bd = Infinity;
   for (const c of n.stor) {
     const f = c.lfilter; if (f && f !== item) continue;
-    if (c.inv!.spaceFor(item) - (P.incAll.get(c.id) || 0) < 1) continue;
+    if (reservationRoom(g, c.id, item) < 1) continue;
     const t = f === item ? 0 : c.inv!.count(item) > 0 ? 1 : 2; const d = dist(cx(c), cy(c), x, y);
     if (t < bt || t === bt && d < bd) { bt = t; bd = d; best = c; }
   }
@@ -155,18 +163,41 @@ function findStore(g: Game, r: Robot, item: string): number | null {
   if (r.home === -1) return -1;
   const n = netOfRobot(g, r); if (!n) return null;
   const c = storeDest(g, n, item, r.x, r.y); if (c) return c.id;
-  if (playerIn(g, n) && g.inv.spaceFor(item) > 0) return -1;
+  if (playerIn(g, n) && reservationRoom(g, -1, item) > 0) return -1;
   return null;
 }
 // ---------- обещания (v1.3): пересчитываются по летящим роботам — после загрузки удвоения нет ----------
 function prom(g: Game) {
   const c = tc(g); if (c.prom) return c.prom;
-  const P = c.prom = { out: new Map<number, Map<string, number>>(), inc: new Map<number, Map<string, number>>(), incAll: new Map<number, number>() };
+  const P = c.prom = { out: new Map<number, Map<string, number>>(), inc: new Map<number, Map<string, number>>(), shadows: new Map<number, Inventory | null>() };
   for (const r of g.robots) if (r.k === 'deliver' && r.it) {
-    if (r.step === 0) addP(P.out, r.src, r.it, r.n || 0);
-    const k = r.step === 0 ? r.n || 0 : r.cargo.reduce((a, s) => a + s.count, 0); addP(P.inc, r.tgt, r.it, k); P.incAll.set(r.tgt, (P.incAll.get(r.tgt) || 0) + k);
+    if (r.step === 0 && (r.src !== -1 || (r.pl || 0) === g.pl)) addP(P.out, r.src, r.it, r.n || 0);
+    if (r.tgt !== -1 || (r.pl || 0) === g.pl) { const k = r.step === 0 ? r.n || 0 : r.cargo.reduce((a, s) => a + s.count, 0); addP(P.inc, r.tgt, r.it, k); }
   }
+  for (const r of g.robots) if (r.k === 'store' && (r.tgt >= 0 || r.tgt === -1 && (r.pl || 0) === g.pl)) for (const s of r.cargo) addP(P.inc, r.tgt, s.item, s.count);
   return P;
+}
+/** Reserve real cells, so different items cannot both claim the same empty slot. */
+function reservationRoom(g: Game, id: number, item: string): number {
+  const P = prom(g);
+  if (!P.shadows.has(id)) {
+    const source = id === -1 ? g.inv : g.ents.get(id)?.inv;
+    if (!source) P.shadows.set(id, null);
+    else {
+      const shadow = new Inventory(source.size); shadow.slotLimit = source.slotLimit; shadow.filt = source.filt?.slice(); shadow.load(source.slots);
+      let fits = true;
+      for (const [it, count] of P.inc.get(id) || []) {
+        if (ITEMS[it]?.droneModel) {
+          let left = count;
+          for (let i = 0; i < shadow.slotLimit && left > 0; i++) if (!shadow.slots[i] && (!shadow.filt?.[i] || shadow.filt[i] === it)) { shadow.slots[i] = { item: it, count: 1 }; left--; }
+          if (left) fits = false;
+        } else if (shadow.add(it, count)) fits = false;
+      }
+      P.shadows.set(id, fits ? shadow : null);
+    }
+  }
+  const shadow = P.shadows.get(id);
+  return !shadow ? 0 : ITEMS[item]?.droneModel ? shadow.instanceSpace(item) : shadow.spaceFor(item);
 }
 function addP(M: Map<number, Map<string, number>>, id: number, it: string, k: number) { let m = M.get(id); if (!m) M.set(id, m = new Map()); m.set(it, (m.get(it) || 0) + k); }
 /** для окон и тестов: сколько предмета обещано отдать из сундука / привезти в него */
@@ -206,17 +237,34 @@ function targetPos(g: Game, r: Robot): [number, number] | null {
   }
   return null;
 }
-function give(r: Robot, item: string, n: number) { if (n <= 0) return; const s = r.cargo.find(c => c.item === item); if (s) s.count += n; else r.cargo.push({ item, count: n }); }
+function give(r: Robot, item: string, n: number, stack?: Stack) {
+  if (stack?.instance) { r.cargo.push({ item: stack.item, count: 1, instance: { ...stack.instance } }); return; }
+  if (n <= 0 || ITEMS[item]?.droneModel) return;
+  const s = r.cargo.find(c => c.item === item && !c.instance); if (s) s.count += n; else r.cargo.push({ item, count: n });
+}
+function dropCargo(g: Game, r: Robot, x: number, y: number) {
+  const left: Stack[] = [];
+  for (const s of r.cargo) {
+    if (s.instance) { if (!g.dropGroundStack(x, y, s)) left.push(s); }
+    else g.dropGround(x, y, s.item, s.count);
+  }
+  r.cargo = left;
+  return left.length === 0;
+}
 /** задача отменилась или выполнена: груз — на склад, иначе домой */
 function finish(g: Game, r: Robot) {
   r.step = 0; r.src = -2; r.used = undefined; r.it = undefined; r.n = undefined; tc(g).prom = null;
   if (r.cargo.length) { const t = findStore(g, r, r.cargo[0].item); r.k = 'store'; r.tgt = t ?? -2; } else { r.k = 'home'; r.tgt = -2; }
+  tc(g).prom = null; // The new store destination is itself an incoming reservation.
 }
 /** положить груз робота в сундук / инженеру; вернуть, сколько стопок осталось */
 function unload(g: Game, r: Robot, dst: number) {
   for (const s of r.cargo) {
-    if (dst === -1) s.count = g.inv.add(s.item, s.count);
-    else { const c = g.ents.get(dst); if (c && c.inv) { const k = Math.min(s.count, c.inv.spaceFor(s.item)); if (k) { c.inv.add(s.item, k); s.count -= k; } } }
+    if (s.instance) {
+      if (dst === -1) { if (g.inv.addStack(s)) s.count = 0; }
+      else { const c = g.ents.get(dst); if (c && g.insertItemStack(c, s, false, false, undefined, r)) s.count = 0; }
+    } else if (dst === -1) s.count = g.inv.add(s.item, s.count);
+    else { const c = g.ents.get(dst); if (c) s.count -= g.insertItem(c, s.item, s.count, false); }
   }
   r.cargo = r.cargo.filter(s => s.count > 0);
 }
@@ -240,14 +288,14 @@ function arrive(g: Game, r: Robot) {
     }
     case 'decon': {
       const e = g.ents.get(r.tgt);
-      if (e && e.decon) { g.removeEntity(e, false, (it, n) => give(r, it, n)); tele.robot(g, 'decon'); g.snd('pickup', cx(e), cy(e)); }
+      if (e && e.decon && !dismantleBlock(e)) { g.removeEntity(e, false, (it, n, stack) => give(r, it, n, stack)); tele.robot(g, 'decon'); g.snd('pickup', cx(e), cy(e)); }
       finish(g, r); return;
     }
     case 'tile': { // v1.4: покрытие по призраку
       const x = Math.floor(r.tgt / 131072) - 65536, y = (r.tgt % 131072) - 65536; const it = r.cargo[0]; const want = g.tileMarks.get(r.tgt);
       if (it && want === it.item) {
         const f = FLOOR_BY_ITEM[want]; g.tileMarks.delete(r.tgt); g.floorVer++;
-        if (f && g.canFloor(x, y) && g.floorAt(x, y) !== f) { it.count--; if (!it.count) r.cargo.shift(); g.setFloor(x, y, f, (i2, n2) => give(r, i2, n2)); g.stats.floors = (g.stats.floors || 0) + 1; tele.robot(g, 'tile'); }
+        if (f && g.canFloor(x, y, f) && g.floorAt(x, y) !== f) { it.count--; if (!it.count) r.cargo.shift(); g.setFloor(x, y, f, (i2, n2) => give(r, i2, n2)); g.stats.floors = (g.stats.floors || 0) + 1; tele.robot(g, 'tile'); }
       }
       finish(g, r); return;
     }
@@ -260,7 +308,7 @@ function arrive(g: Game, r: Robot) {
       const e = g.ents.get(r.tgt); const it = r.cargo[0];
       if (e && it && e.upgrade === it.item && g.replaceTarget(it.item, e.x, e.y, e.dir)) {
         it.count--; if (!it.count) r.cargo.shift();
-        g.fastReplace(e, it.item, e.dir, false, (x, n) => give(r, x, n)); tele.robot(g, 'upgrade');
+        g.fastReplace(e, it.item, e.dir, false, (x, n, stack) => give(r, x, n, stack)); tele.robot(g, 'upgrade');
       }
       finish(g, r); return;
     }
@@ -278,22 +326,26 @@ function arrive(g: Game, r: Robot) {
     case 'deliver': {
       if (r.step === 0) { // у источника: забрать обещанное (сколько осталось — инженер или манипулятор могли взять раньше)
         const it = r.it!; let k = 0;
-        if (r.src === -1) { k = Math.min(r.n || 0, g.inv.count(it)); if (k) g.inv.remove(it, k); }
+        if (ITEMS[it]?.droneModel) {
+          const inv = r.src === -1 ? g.inv : g.ents.get(r.src)?.inv;
+          if (inv) for (let i = 0; i < inv.size; i++) { const s = inv.slots[i]; if (s?.item !== it || !s.instance) continue; const moved = inv.takeSlot(i); if (moved) { give(r, it, 1, moved); k = 1; } break; }
+        } else if (r.src === -1) { k = Math.min(r.n || 0, g.inv.count(it)); if (k) g.inv.remove(it, k); }
         else { const s = g.ents.get(r.src); if (s && s.inv) { k = Math.min(r.n || 0, s.inv.count(it)); if (k) s.inv.remove(it, k); } }
         tc(g).prom = null;
         if (!k) { finish(g, r); return; }
-        give(r, it, k); r.step = 1; r.n = k; return;
+        if (!ITEMS[it]?.droneModel) give(r, it, k); r.step = 1; r.n = k; return;
       }
       const s0 = r.cargo[0]; if (!s0) { finish(g, r); return; }
-      if (r.tgt === -1) s0.count = g.inv.add(s0.item, s0.count);
-      else { const c = g.ents.get(r.tgt); if (c && c.inv) { const k = Math.min(s0.count, c.inv.spaceFor(s0.item)); if (k) { c.inv.add(s0.item, k); s0.count -= k; } } }
+      if (s0.instance) { if (r.tgt === -1) { if (g.inv.addStack(s0)) s0.count = 0; } else { const c = g.ents.get(r.tgt); if (c && g.insertItemStack(c, s0, false, false, undefined, r)) s0.count = 0; } }
+      else if (r.tgt === -1) s0.count = g.inv.add(s0.item, s0.count);
+      else { const c = g.ents.get(r.tgt); if (c) s0.count -= g.insertItem(c, s0.item, s0.count, false); }
       r.cargo = r.cargo.filter(x => x.count > 0); tele.robot(g, 'deliver');
       finish(g, r); return;
     }
     case 'store': {
       if (r.tgt === -2) { if ((g.tick + r.id) % 60 === 0) finish(g, r); return; } // некуда сложить — ждём, пока появится место
       unload(g, r, r.tgt);
-      if (r.cargo.length) { if (r.home === -1) { for (const s of r.cargo) g.dropGround(g.player.x, g.player.y, s.item, s.count); r.cargo = []; } else { finish(g, r); return; } }
+      if (r.cargo.length) { if (r.home === -1) { if (!dropCargo(g, r, g.player.x, g.player.y)) return; } else { finish(g, r); return; } }
       r.k = 'home'; r.tgt = -2; return;
     }
     case 'home': {
@@ -415,7 +467,7 @@ export function stepRobots(g: Game) {
       r.k = r.cargo.length ? 'store' : 'home'; r.tgt = -1; r.step = 0;
     }
     if (r.k === 'home' && r.home !== -1 && !g.ents.has(r.home)) { if (!netOfRobot(g, r)) { // робопортов не осталось — робот садится на землю
-      g.dropGround(r.x, r.y, robotItem(r), 1); for (const s of r.cargo) g.dropGround(r.x, r.y, s.item, s.count); dock(g, r); continue; } }
+      g.dropGround(r.x, r.y, robotItem(r), 1); if (!dropCargo(g, r, r.x, r.y)) continue; dock(g, r); continue; } }
     const tp = targetPos(g, r);
     if (!tp) { if (r.k !== 'home' && r.k !== 'store') finish(g, r); else if (r.k === 'store' && r.tgt !== -2) finish(g, r); continue; }
     const sp = r.lg ? lsp : sp0; const v = r.e > 0 ? sp : sp * 0.2; // без заряда — 20% скорости, но не зависает
@@ -451,7 +503,7 @@ export function stepRobots(g: Game) {
   if (g.marked.size && assigned < MAX_ASSIGN) {
     const list: Entity[] = []; for (const id of g.marked) if ((id + g.tick) % 8 === 0) { const e = g.ents.get(id); if (e) list.push(e); }
     list.sort((a, b) => a.id - b.id);
-    for (const e of list) { if (assigned >= MAX_ASSIGN || checks >= MAX_CHECKS) break; if (e.decon) probe({ k: 'decon', id: e.id, x: cx(e), y: cy(e), item: null }); else if (e.upgrade && g.replaceTarget(e.upgrade, e.x, e.y, e.dir)) probe({ k: 'upgrade', id: e.id, x: cx(e), y: cy(e), item: e.upgrade }); }
+    for (const e of list) { if (assigned >= MAX_ASSIGN || checks >= MAX_CHECKS) break; if (e.decon && !dismantleBlock(e)) probe({ k: 'decon', id: e.id, x: cx(e), y: cy(e), item: null }); else if (e.upgrade && g.replaceTarget(e.upgrade, e.x, e.y, e.dir)) probe({ k: 'upgrade', id: e.id, x: cx(e), y: cy(e), item: e.upgrade }); }
   }
   if (g.treeMarks.size && assigned < MAX_ASSIGN) {
     const list: number[] = []; for (const k of g.treeMarks) if ((k + g.tick) % 8 === 0) list.push(k); list.sort((a, b) => a - b);
@@ -480,10 +532,11 @@ const MAX_LOGI = 50;
 export const REQ_SLOTS = 12;
 const personalOn = (g: Game) => g.research.done.has('personal-logistics') && !g.preqOff && !g.player.dead && g.preq.length > 0;
 function startDeliver(g: Game, who: Robot | Entity, n: RoboNet, src: number, tgt: number, it: string, k: number) {
+  const P = prom(g); // Capture promises before the new robot becomes a delivery.
   const r = 'k' in who ? who as Robot : launch(g, who as Entity, true);
   if (g.peers.length) r.pl = g.pl;
   r.k = 'deliver'; r.src = src; r.tgt = tgt; r.step = 0; r.it = it; r.n = k; r.used = undefined;
-  const P = prom(g); addP(P.out, src, it, k); addP(P.inc, tgt, it, k); P.incAll.set(tgt, (P.incAll.get(tgt) || 0) + k);
+  addP(P.out, src, it, k); addP(P.inc, tgt, it, k); P.shadows.delete(tgt);
   void n;
 }
 /** источник для запроса по приоритету: активное снабжение → буфер (если можно) → пассивное снабжение / хранение; внутри — ближайший */
@@ -514,10 +567,10 @@ function stepLogistics(g: Game, I: RoboIndex) {
         for (let i = 0; i < g.preq.length && checks < MAX_LOGI; i++) {
           const q = g.preq[i]; if (!q || q.min <= 0) continue;
           const need = q.min - g.inv.count(q.item) - (P.inc.get(-1)?.get(q.item) || 0); if (need <= 0) continue;
-          checks++; if (g.inv.spaceFor(q.item) < 1) continue;
+          checks++; const room = reservationRoom(g, -1, q.item); if (room < 1) continue;
           const src = logiSource(g, pnet!, q.item, g.player.x, g.player.y, -1, true); if (!src) continue;
           const who = pickRobot(g, pnet!, cx(src.e), cy(src.e), dist(cx(src.e), cy(src.e), g.player.x, g.player.y), true); if (!who) continue;
-          assign(who, pnet!, src.e.id, -1, q.item, Math.min(cap, need, src.avail));
+          assign(who, pnet!, src.e.id, -1, q.item, Math.min(cap, need, src.avail, room, ITEMS[q.item]?.droneModel ? 1 : cap));
         }
         continue;
       }
@@ -530,12 +583,12 @@ function stepLogistics(g: Game, I: RoboIndex) {
         if (need <= 0) { c.lw[i] = 0; continue; }
         if (!c.lw[i]) c.lw[i] = g.tick || 1;
         if (checks >= MAX_LOGI) continue; checks++;
-        const room = c.inv!.spaceFor(q.item) - (P.incAll.get(c.id) || 0); if (room < 1) continue;
+        const room = reservationRoom(g, c.id, q.item); if (room < 1) continue;
         const src = logiSource(g, n, q.item, cx(c), cy(c), c.id, !isBuf && !!c.rbuf);
         if (!src) { st = 'noitem'; continue; }
         const who = pickRobot(g, n, cx(src.e), cy(src.e), dist(cx(src.e), cy(src.e), cx(c), cy(c)), true);
         if (!who) { st = st || 'norobot'; continue; }
-        assign(who, n, src.e.id, c.id, q.item, Math.min(cap, need, src.avail, room));
+        assign(who, n, src.e.id, c.id, q.item, Math.min(cap, need, src.avail, room, ITEMS[q.item]?.droneModel ? 1 : cap));
       }
       if (c.lst !== st) { c.lst = st; g.fxVer++; }
     }
@@ -551,7 +604,7 @@ function stepLogistics(g: Game, I: RoboIndex) {
       const a = c.inv!.count(sl.item) - (P.out.get(c.id)?.get(sl.item) || 0); if (a < 1) continue;
       const d = storeDest(g, n, sl.item, cx(c), cy(c)); if (!d) continue;
       const who = pickRobot(g, n, cx(c), cy(c), dist(cx(c), cy(c), cx(d), cy(d)), true); if (!who) break;
-      startDeliver(g, who, n, c.id, d.id, sl.item, Math.min(cap, a, d.inv!.spaceFor(sl.item))); jobs++; break;
+      startDeliver(g, who, n, c.id, d.id, sl.item, Math.min(cap, a, reservationRoom(g, d.id, sl.item), ITEMS[sl.item]?.droneModel ? 1 : cap)); jobs++; break;
     }
   }
   // 3. мусор инженера: всё сверх max — в хранение
@@ -560,7 +613,7 @@ function stepLogistics(g: Game, I: RoboIndex) {
     const a = g.inv.count(q.item) - q.max - (P.out.get(-1)?.get(q.item) || 0); if (a < 1) continue;
     const d = storeDest(g, pnet, q.item, g.player.x, g.player.y); if (!d) continue;
     const who = pickRobot(g, pnet, g.player.x, g.player.y, dist(g.player.x, g.player.y, cx(d), cy(d)), true); if (!who) continue;
-    startDeliver(g, who, pnet, -1, d.id, q.item, Math.min(cap, a)); jobs++;
+    startDeliver(g, who, pnet, -1, d.id, q.item, Math.min(cap, a, reservationRoom(g, d.id, q.item), ITEMS[q.item]?.droneModel ? 1 : cap)); jobs++;
   }
 }
 

@@ -20,6 +20,14 @@ const DIR = 'tests/saves';
 const man = JSON.parse(fs.readFileSync(DIR + '/MANIFEST.json', 'utf8'));
 const extra = fs.readdirSync(DIR).filter(f => /\.(z7save|txt)$/.test(f) && !man.files.some((m: any) => m.file === f));
 
+// SPEC 1.17 migrates the old 80 slots to 96 and credits exactly two +32 stages.
+// Preserve the full comparison of every other research and state field.
+const expectedInventoryMigration = (s: any, before: ReturnType<typeof ledger>) => {
+  if (s.v >= 21 || s.inv?.length !== 80) return before;
+  const [done, current, progress, levels] = JSON.parse(before.research);
+  return { ...before, research: JSON.stringify([[...new Set([...done, 'inventory-expansion-1', 'inventory-expansion-2'])].sort(), current, progress, levels]) };
+};
+
 console.log(`1. Архив: ${man.files.length} сохранений${extra.length ? ` + ${extra.length} без описи (${extra.join(', ')})` : ''}`);
 for (const m of man.files) {
   console.log(`— ${m.file} (${m.label})`);
@@ -27,12 +35,14 @@ for (const m of man.files) {
   const s = unpack(raw);
   ok(diffLedger(m.ledger, ledger(s)).length === 0, `файл цел: сводка совпадает с описью (${m.ents} построек, ${Object.values(m.ledger.items as Record<string, number>).reduce((a, b) => a + b, 0)} предметов)`);
   ok(s.v === m.fmt && saveEra(s).includes(m.version.replace('v1.0-', '')) || saveEra(s).startsWith('v0.3'), `формат v${s.v}, версия по полям: ${saveEra(s)}`);
+  const expected = expectedInventoryMigration(s, m.ledger), oldSlots = s.inv.length;
   let g: Game; const t0 = Date.now();
   try { g = deserialize(s); } catch (e) { ok(false, 'загрузка: ' + (e as Error).message); continue; }
   ok(true, `загружено за ${Date.now() - t0} мс`);
+  if (s.v < 21 && oldSlots === 80) ok(g.inv.size === 96, '1.17: прежние 80 ячеек перенесены в 96');
   const after = JSON.parse(JSON.stringify(serialize(g))); // копия: serialize отдаёт ссылки на живые объекты
   const skip: any[] = []; if (m.ledger.tele === -1) skip.push('tele'); // статистики партии до rc3 не было — заводится новая
-  const d = diffLedger(m.ledger, ledger(after), { skip, fluidTol: 1e-6 });
+  const d = diffLedger(expected, ledger(after), { skip, fluidTol: 1e-6 });
   ok(d.length === 0, d.length ? 'потери: ' + d.slice(0, 8).join('; ') : 'без потерь: предметы, постройки, исследования, жидкости, мир, Рой — всё на месте');
   const rep = g.loadReport!; const txt = reportText(rep, SAVE_VERSION); reports.push(txt || "");
   ok(Object.keys(rep.dropped).length === 0, 'ничего не выброшено как неизвестное');
@@ -56,7 +66,7 @@ for (const m of man.files) {
 for (const f of extra) {
   console.log(`— ${f} (без описи — например, присланное игроком)`);
   try { const s = await unpackStr(fs.readFileSync(`${DIR}/${f}`, 'utf8').replace(/[\s\S]*-----BEGIN ZAVOD7 SAVE-----|-----END ZAVOD7 SAVE-----[\s\S]*/g, ''));
-    const L = ledger(s), g = deserialize(s); const d = diffLedger(L, ledger(serialize(g)), { skip: s.tele ? [] : ['tele'] });
+    const L = expectedInventoryMigration(s, ledger(s)), g = deserialize(s); const d = diffLedger(L, ledger(serialize(g)), { skip: s.tele ? [] : ['tele'] });
     ok(d.length === 0, `${saveEra(s)}: ${d.length ? 'потери: ' + d.slice(0, 6).join('; ') : 'без потерь'}`); for (let i = 0; i < 600; i++) g.step(); ok(true, '10 с игры без ошибок');
   } catch (e) { ok(false, (e as Error).message); }
 }

@@ -6,6 +6,7 @@ import type { ModStore, ModDiff } from '../client/modstore';
 import type { ApplyReport } from '../mods/registry';
 import { errText, ModError } from '../mods/mod';
 import { tr } from '../core/i18n';
+import type { ModStat } from '../mods/script';
 
 const esc = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 export interface ModsHooks {
@@ -13,6 +14,7 @@ export interface ModsHooks {
   download(name: string, data: Uint8Array): void; msg(t: string): void; render(): void; close(): void; game: string;
   /** ожидающая загрузка с другим набором модов */ pending(): { diff: ModDiff; label: string } | null;
   resolve(how: 'enable' | 'without' | 'cancel'): void;
+  /** v1.11: замеры скриптов модов */ scriptStats(): ModStat[];
 }
 export class ModsUI {
   drag: number | null = null; note = ''; open = new Set<string>();
@@ -41,7 +43,7 @@ export class ModsUI {
       const state = !m.on ? '<span class="dim">выключен</span>' : st.dirty ? '<span class="dim">включится после «Применить»</span>' : f ? '<span class="bad">не загружен</span>' : loaded ? '<span class="good">загружен</span>' : '<span class="dim">ждёт применения</span>';
       b += `<div class="srow modrow ${this.drag === i ? 'drag' : ''}" data-mrow="${i}"><span class="dim grip" data-act="mm-drag" data-i="${i}" title="Перетащите, чтобы изменить порядок загрузки">⠿ ${i + 1}.</span>
         <button class="mini" data-act="mm-toggle" data-n="${esc(m.name)}" ${this.h.busy() ? 'disabled' : ''}>${m.on ? '☑' : '☐'}</button>
-        <span class="mtitle"><b>${esc(inf.title)}</b> <span class="dim small">${esc(m.name)} ${esc(inf.version)}${inf.author ? ' · ' + esc(inf.author) : ''}${inf.gameVersion ? ' · игра ' + esc(inf.gameVersion) : ''}${inf.dependencies.length ? ' · нужны: ' + inf.dependencies.map(d => esc(d.name + (d.range ? ' ' + d.range : '') + (d.optional ? ' (необяз.)' : ''))).join(', ') : ''}</span> · ${state}
+        <span class="mtitle"><b>${esc(inf.title)}</b> ${m.pkg.files['control.js'] ? `<span class="codebadge" title="Мод содержит код (control.js): выполняется в отдельной песочнице без доступа к сети, хранилищу браузера, сохранениям и другим модам">⚙ содержит код</span> ${this.scriptLine(m.name)}` : ''} <span class="dim small">${esc(m.name)} ${esc(inf.version)}${inf.author ? ' · ' + esc(inf.author) : ''}${inf.gameVersion ? ' · игра ' + esc(inf.gameVersion) : ''}${inf.dependencies.length ? ' · нужны: ' + inf.dependencies.map(d => esc(d.name + (d.range ? ' ' + d.range : '') + (d.optional ? ' (необяз.)' : ''))).join(', ') : ''}</span> · ${state}
         ${inf.description ? `<div class="small">${esc(inf.description)}</div>` : ''}${this.errs(errs, 'e:' + m.name, false)}${this.errs(warns, 'w:' + m.name, true)}</span>
         <button class="mini" data-act="mm-del" data-n="${esc(m.name)}">Удалить</button></div>`;
     });
@@ -54,7 +56,14 @@ export class ModsUI {
         <button data-act="mm-install">Установить из файла (.zip)</button><button data-act="mm-export" ${st.list.some(m => m.on) ? '' : 'disabled'}>Создать пакет модов</button>
         ${st.list.some(m => m.on) ? '<button data-act="mm-off">Выключить все</button>' : ''}</div>
       ${this.note ? `<div class="small">${esc(this.note)}</div>` : ''}<div class="dim small">${sum}</div>
-      <div class="dim small">Формат мода: info.json, prototypes/*.json (операции add / patch / remove), locale/en.json, спрайты PNG — см. README, раздел «Моды».</div></div>`;
+      <div class="dim small">Формат мода: info.json, prototypes/*.json (операции add / patch / remove), locale/en.json, спрайты PNG, скрипт control.js — см. README, разделы «Моды» и «Скрипты модов».</div>
+      <div class="row2"><button class="mini" data-act="mconsole">Консоль модов (Ctrl+\`)</button></div></div>`;
+  }
+  private scriptLine(name: string) {
+    const s = this.h.scriptStats().find(x => x.name === name); if (!s) return '';
+    if (s.state === 'run') return `<span class="small ${s.ms > 1 ? 'warnline' : 'dim'}">${s.ms.toFixed(2)} мс/тик (пик ${s.peak.toFixed(1)} мс)</span>`;
+    if (s.state === 'start') return '<span class="small dim">скрипт запускается…</span>';
+    return `<span class="small bad">скрипт отключён: ${esc(s.reason || '')}</span>`;
   }
   private checkHtml() {
     const p = this.h.pending(); if (!p) return `<div class="panel"><div class="title">Моды сохранения <span class="x" data-act="close">✕</span></div><div class="dim">Нет загрузки.</div></div>`;

@@ -3,9 +3,10 @@
 // урон поездам и рельсам, сохранение с резервами блоков, детерминизм, 100 кругов с рудой по условию «груз».
 import { Game, Entity } from '../src/sim/game';
 import { serialize, deserialize, stateHash } from '../src/sim/save';
-import { graph, carAt, FWAGON_CAP, Train, trainOf } from '../src/sim/trains';
+import { graph, carAt, FWAGON_CAP, Train, trainOf, restoreTrains, placeCar, railAt, trailPoint } from '../src/sim/trains';
 import { sigValue } from '../src/sim/circuits';
 import { makeBlueprint, rotateBp, flipBp } from '../src/sim/blueprint';
+import { addLocoFuel, locoFuelInventory, locoFuelStacks } from '../src/sim/trainfuel';
 import { flat, lay, straight, signal, train, station, run, minGap, ok, fails } from './railkit';
 
 /** петля: верх 0..80 на восток, низ 80..0 на запад; станции A (верх) и B (низ); 4 светофора */
@@ -18,6 +19,8 @@ function loop(seed = 7, sig = true) {
 }
 const auto = (g: Game, t: Train, sched: any[]) => { g.enqueue({ t: 'sched', id: t.cars[0], sched }); g.enqueue({ t: 'tmode', id: t.cars[0], auto: true }); g.step(); };
 const T2 = (g: Game) => train(g, [['locomotive', 60, 40, true], ['cargo-wagon', 67, 40, true]]);
+const locoFuel = (e: Entity) => locoFuelStacks(e)[0];
+const emptyLocoFuel = (e: Entity) => { locoFuelInventory(e)!.slots.fill(null); e.fuel = null; };
 
 console.log('1. Блоки: светофоры делят путь, ставятся только у узла справа по ходу');
 {
@@ -116,7 +119,7 @@ console.log('6. Топливо тратится и на ходу (не толь�
   const g = flat(); straight(g, 0, 0, 2, 500); station(g, 996, 1, 1, 'Конец');
   const t = train(g, [['locomotive', 20, 0], ['cargo-wagon', 13, 0]]); const L = g.ents.get(t.cars[0])!;
   auto(g, t, [{ st: 'Конец', c: 'time', n: 1 }]);
-  const E = () => (L.fuel ? L.fuel.count : 0) * 4e6 + (L.fuelJ || 0);
+  const E = () => locoFuelInventory(L)!.count('coal') * 4e6 + (L.fuelJ || 0);
   let cruise = 0, burnt = 0, vmax = 0; for (let i = 0; i < 6000 && t.st !== 'wait'; i++) { const v0 = t.v, e0 = E(); g.step(); if (t.v === v0 && v0 > 0) { cruise++; burnt += e0 - E(); } vmax = Math.max(vmax, t.v); }
   ok(cruise > 30 && burnt > 0, `на постоянной скорости ${cruise} тиков, сожжено ${(burnt / 1e6).toFixed(2)} МДж`);
   // урон: рельс под поездом не разрушается, вагон — разрушается (поезд делится/уменьшается)
@@ -153,10 +156,94 @@ console.log('9. 100 кругов с рудой: сундук → манипул�
   ok(bx > 0, 'вагон у B, клетка ' + bx);
   const ins2 = g.build('fast-inserter', bx + 2, 38, 0, false)!, dst = g.build('iron-chest', bx + 2, 37, 0, false)!; void ins2;
   const laps0 = t.laps || 0; let got = 0;
-  for (let i = 0; i < 600000 && (t.laps || 0) - laps0 < 100; i++) { if (src.inv!.count('iron-ore') < 100) src.inv!.add('iron-ore', 100); const Lc = g.ents.get(t.cars[0])!; if (!Lc.fuel || Lc.fuel.count < 5) Lc.fuel = { item: 'coal', count: 50 }; g.step(); if (i % 600 === 0) { const n = dst.inv!.count('iron-ore'); if (n) { dst.inv!.remove('iron-ore', n); got += n; } } }
+  for (let i = 0; i < 600000 && (t.laps || 0) - laps0 < 100; i++) { if (src.inv!.count('iron-ore') < 100) src.inv!.add('iron-ore', 100); const Lc = g.ents.get(t.cars[0])!; const have = locoFuelInventory(Lc)!.count('coal'); if (have < 5) addLocoFuel(Lc, 'coal', 50 - have); g.step(); if (i % 600 === 0) { const n = dst.inv!.count('iron-ore'); if (n) { dst.inv!.remove('iron-ore', n); got += n; } } }
   got += dst.inv!.count('iron-ore');
   ok((t.laps || 0) - laps0 >= 100, `100 кругов за ${g.tick} тиков`);
   ok(got >= 100 * 50 - 50, `привезено руды: ${got}`);
+}
+
+console.log('10. Автозаправка остановленного без топлива локомотива: твёрдое топливо, начало движения и очистка клеток');
+{
+  const { g } = loop(); const t = train(g, [['locomotive', 20, 0]]), L = g.ents.get(t.cars[0])!; emptyLocoFuel(L);
+  const x = Math.floor(L._cx!), y = Math.floor(L._cy!) - 1;
+  const ins = g.build('fast-inserter', x, y - 1, 2, false)!, src = g.build('iron-chest', x, y - 2, 0, false)!;
+  src.inv!.add('solid-fuel', 2);
+  auto(g, t, [{ st: 'A', c: 'item', it: 'iron-ore', op: '>', n: 99 }]); run(g, 20, () => t.st === 'nofuel');
+  ok(t.st === 'nofuel' && t.v === 0, 'поезд останавливается с nofuel на пути к станции');
+  ok(carAt(g, x, y) === L && ins._io?.[1] === null,
+    'закешированная пустая клетка entAt получает локомотив через carCells fallback');
+  const loaded = deserialize(JSON.parse(JSON.stringify(serialize(g)))), Lh = loaded.ents.get(L.id)!;
+  ok(loaded.trains.some(q => q.st === 'nofuel' && q.v === 0) && carAt(loaded, x, y) === Lh,
+    'загрузка восстанавливает клетки остановленного nofuel локомотива');
+  restoreTrains(loaded); restoreTrains(loaded);
+  ok(carAt(loaded, x, y) === Lh, 'два последовательных восстановления сохраняют клетки nofuel локомотива');
+  const burned0 = g.stats.consumed['solid-fuel'] || 0;
+  run(g, 180, () => (g.stats.consumed['solid-fuel'] || 0) > burned0);
+  ok((g.stats.consumed['solid-fuel'] || 0) > burned0 && t.v > 0, 'сундук → манипулятор → локомотив: твёрдое топливо запускает поезд');
+  ok(src.inv!.count('solid-fuel') === 1, 'после первой доставки в сундуке остался второй предмет');
+  run(g, 120, () => Math.abs((L._cx || 0) - x) > 3);
+  run(g, 20);
+  ok(t.v > 0 && !carAt(g, x, y) && src.inv!.count('solid-fuel') === 1 && !ins.hand,
+    'при движении старые клетки очищены: манипулятор не забирает следующий предмет');
+}
+
+console.log('11. Топливо манипулятором на станции: coal, фильтр неверного предмета, пять ячеек и сохранение');
+{
+  const { g, A } = loop(); const t = train(g, [['locomotive', 20, 0], ['cargo-wagon', 13, 0]]), L = g.ents.get(t.cars[0])!;
+  auto(g, t, [{ st: 'A', c: 'item', it: 'iron-ore', op: '>', n: 99 }]); run(g, 4000, () => t.st === 'wait' && t.tgt === A.id);
+  let x = -1, y = 0; for (let yy = -4; yy <= 44 && x < 0; yy++) for (let xx = 0; xx <= 80 && x < 0; xx++) if (carAt(g, xx, yy) === L) { x = xx; y = yy; }
+  ok(x >= 0, 'у стоящего локомотива найдена физическая клетка манипулятора'); emptyLocoFuel(L); L.fuelJ = 0;
+  const ins = g.build('fast-inserter', x, y - 1, 2, false)!, src = g.build('iron-chest', x, y - 2, 0, false)!;
+  src.inv!.add('iron-ore', 3); src.inv!.add('coal', 11); run(g, 500);
+  const loadedFuel = locoFuel(L);
+  ok(t.st === 'wait' && loadedFuel?.item === 'coal' && loadedFuel.count === 11, `манипулятор использует обычную вместимость топливных ячеек (${loadedFuel?.count || 0})`);
+  ok(src.inv!.count('coal') === 0 && src.inv!.count('iron-ore') === 3 && !ins.hand,
+    'весь допустимый уголь загружен, неверная руда остаётся в источнике');
+  const h = deserialize(JSON.parse(JSON.stringify(serialize(g)))), Lh = h.ents.get(L.id)!;
+  ok(locoFuel(Lh)?.item === 'coal' && locoFuel(Lh)?.count === 11 && h.trains.some(q => q.st === 'wait') && carAt(h, x, y) === Lh,
+    'сохранение восстанавливает топливо локомотива и станционные клетки');
+}
+
+console.log('12. Потеря цели во время движения не выбрасывает уже взятый предмет');
+{
+  const { g, A } = loop(); const t = train(g, [['locomotive', 20, 0], ['cargo-wagon', 13, 0]]), L = g.ents.get(t.cars[0])!;
+  auto(g, t, [{ st: 'A', c: 'time', n: 36000 }, { st: 'B', c: 'time', n: 30 }]); run(g, 4000, () => t.st === 'wait' && t.tgt === A.id);
+  let x = -1, y = 0; for (let yy = -4; yy <= 44 && x < 0; yy++) for (let xx = 0; xx <= 80 && x < 0; xx++) if (carAt(g, xx, yy) === L) { x = xx; y = yy; }
+  emptyLocoFuel(L); L.fuelJ = 4e6;
+  const ins = g.build('fast-inserter', x, y - 1, 2, false)!, src = g.build('iron-chest', x, y - 2, 0, false)!;
+  src.inv!.add('coal', 1); ins.coff = true; run(g, 80); while ((g.tick + t.id) % 10 !== 0) g.step();
+  t.sched[0].n = 1; ins.coff = false; g.step(); run(g, 20);
+  ok(t.v > 0 && ins.hand === 'coal' && src.inv!.count('coal') === 0,
+    'поезд уехал между захватом и выгрузкой, предмет сохранился в руке манипулятора');
+}
+
+console.log('13. Подача твёрдого топлива с конвейера в локомотив у станции');
+{
+  const { g, A } = loop(); const t = train(g, [['locomotive', 20, 0], ['cargo-wagon', 13, 0]]), L = g.ents.get(t.cars[0])!;
+  auto(g, t, [{ st: 'A', c: 'item', it: 'iron-ore', op: '>', n: 99 }]); run(g, 4000, () => t.st === 'wait' && t.tgt === A.id);
+  let x = -1, y = 0; for (let yy = -4; yy <= 44 && x < 0; yy++) for (let xx = 0; xx <= 80 && x < 0; xx++) if (carAt(g, xx, yy) === L) { x = xx; y = yy; }
+  emptyLocoFuel(L); L.fuelJ = 0;
+  const ins = g.build('fast-inserter', x, y - 1, 2, false)!, belt = g.build('transport-belt', x, y - 2, 2, false)!;
+  belt.lanes![0][0].push({ item: 'solid-fuel', pos: 0, n: 1 }); run(g, 50);
+  const loadedFuel = locoFuel(L);
+  ok(t.st === 'wait' && loadedFuel?.item === 'solid-fuel' && loadedFuel.count === 1 && belt.lanes!.every(s => s.every(a => a.length === 0)),
+    'конвейер → манипулятор → физическая клетка локомотива');
+}
+
+console.log('14. Изменение состава nofuel поезда и снятие нового локомотива очищают индекс');
+{
+  const { g } = loop(); const t = train(g, [['locomotive', 20, 0]]), L = g.ents.get(t.cars[0])!; emptyLocoFuel(L);
+  auto(g, t, [{ st: 'A', c: 'item', it: 'iron-ore', op: '>', n: 99 }]); run(g, 20, () => t.st === 'nofuel');
+  const [hx, hy] = trailPoint(graph(g), t, 0), rail = railAt(g, Math.floor(hx), Math.floor(hy), hx, hy);
+  const added = rail && placeCar(g, 'locomotive', rail.id, hx, hy, false);
+  ok(!!added && typeof added !== 'string', 'локомотив можно прицепить к остановленному nofuel составу');
+  if (added && typeof added !== 'string') {
+    const addedKeys = [...g.carCells].filter(([, id]) => id === added.id).map(([key]) => key);
+    ok(addedKeys.length > 0, 'после изменения состава индекс включает физические клетки нового локомотива');
+    g.removeEntity(added);
+    ok(addedKeys.every(key => g.carCells.get(key) !== added.id) && ![...g.carCells.values()].includes(added.id),
+      'после снятия локомотива его старые ключи удалены из carCells');
+  }
 }
 
 console.log(fails ? `\n✘ провалов: ${fails}` : '\n✔ все проверки пройдены');

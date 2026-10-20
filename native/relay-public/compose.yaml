@@ -1,0 +1,47 @@
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.native
+      args:
+        ZAVOD_INVITE_ORIGIN: "https://${ZAVOD_SERVER_DOMAIN:?Set an owned domain in .env}"
+    image: zavod7-native:1.17
+    command: ["node", "/app/dist/native/relay-gateway.mjs"]
+    restart: unless-stopped
+    user: node
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      ZAVOD_RELAY_PUBLIC_ORIGIN: "https://${ZAVOD_SERVER_DOMAIN:?Set an owned domain in .env}"
+      ZAVOD_RELAY_REGISTRATION: "${ZAVOD_RELAY_REGISTRATION:-public}"
+      ZAVOD_RELAY_HOST_TOKEN: "${ZAVOD_RELAY_HOST_TOKEN:-}"
+      ZAVOD_RELAY_TRUST_PROXY: "1"
+      ZAVOD_NATIVE_INSTALLER_PATH: /downloads/Zavod7-Server-Setup.exe
+      ZAVOD_RELAY_PORT: "17900"
+    expose: ["17900"]
+    volumes:
+      - ./downloads:/downloads:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "const n=require('node:net');const s=n.connect(17900,'127.0.0.1',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
+  https:
+    image: caddy:2.11.7-alpine
+    restart: unless-stopped
+    depends_on:
+      relay:
+        condition: service_healthy
+    environment:
+      ZAVOD_SERVER_DOMAIN: "${ZAVOD_SERVER_DOMAIN:?Set an owned domain in .env}"
+      ZAVOD_ACME_EMAIL: "${ZAVOD_ACME_EMAIL:?Set the operator email in .env}"
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+volumes:
+  caddy-data:
+  caddy-config:

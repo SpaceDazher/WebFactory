@@ -1,26 +1,26 @@
 // E2E v1.8 «Железная дорога II»: светофор мышью (привязка к узлу, направление, подсветка блоков), второй поезд ждёт
 // у красного светофора (значок), лимит станции кнопками, условие «И груз» и И/ИЛИ в расписании, цистерна и насос; EN без кириллицы.
-// Запуск: node tests/e2e23.mjs [chromium|firefox|webkit] (без аргумента — все три; WebKit — из /data/pwold).
+// Запуск: node tests/e2e23.mjs [chromium|firefox|webkit] (без аргумента — все три; WebKit — из кеша Playwright).
+import { launchBrowser, selectedBrowser, appUrl, projectRoot } from './browser.mjs';
+import { startGameplay } from './gameplay-start.mjs';
 import fs from 'fs';
 import { spawnSync } from 'child_process';
-const WK = { PW: '/data/pwold/node_modules/playwright/index.mjs', PLAYWRIGHT_BROWSERS_PATH: '/data/pwold/browsers', PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS: '1', PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: 'ubuntu20.04-x64' };
-const name = process.argv[2];
+const name = process.env.PW_BROWSER || process.argv[2];
 if (!name) {
   let bad = 0; const sum = [];
   for (const n of ['chromium', 'firefox', 'webkit']) {
-    if (n === 'webkit' && !fs.existsSync(WK.PW)) { console.log('\n=== webkit: пропущен (нет /data/pwold)'); continue; }
-    const r = spawnSync(process.execPath, [process.argv[1], n], { stdio: 'inherit', env: { ...process.env, ...(n === 'webkit' ? WK : {}) } });
+    const r = spawnSync(process.execPath, [process.argv[1], n], { stdio: 'inherit', env: process.env });
     sum.push(`${n}: ${r.status === 0 ? 'OK' : 'ПРОВАЛ'}`); if (r.status !== 0) bad++;
   }
   console.log('\n' + sum.join(' · ')); process.exit(bad ? 1 : 0);
 }
-const pw = (await import(process.env.PW || 'playwright')).default;
 let fails = 0; const errs = [];
 const ok = (c, m) => { console.log((c ? '  ✔ ' : '  ✘ ') + m); if (!c) fails++; };
-const URL0 = 'file:///data/game/dist/index.html';
-const VER = JSON.parse(fs.readFileSync('/data/game/package.json', 'utf8')).version;
-fs.mkdirSync('/data/game/shots', { recursive: true });
-const b = await pw[name].launch(name === 'chromium' ? { executablePath: '/usr/local/bin/chromium', args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--use-gl=angle'] } : {});
+const URL0 = appUrl(import.meta.url);
+const ROOT = projectRoot(import.meta.url);
+const VER = JSON.parse(fs.readFileSync(ROOT + '/package.json', 'utf8')).version;
+fs.mkdirSync(ROOT + '/shots', { recursive: true });
+const b = await launchBrowser(name, name === 'chromium' ? { args: ['--enable-unsafe-swiftshader', '--use-gl=angle'] } : {});
 console.log(`\n=== ${name} ${b.version()} (игра ${VER})`);
 const watch = p => { p.on('pageerror', e => errs.push('PAGEERROR ' + e.message)); p.on('console', m => { if (m.type() === 'error') errs.push('CONSOLE ' + m.text().slice(0, 300)); }); };
 const ready = async p => { await p.waitForFunction(() => window.__texMs != null && window.__zavod && (!window.__zavod.sim || window.__zavod.sim.snaps > 2), null, { timeout: 300000 }); await p.waitForTimeout(300); };
@@ -63,8 +63,9 @@ for (const mode of ['webgl', 'canvas']) {
   await ctx.addInitScript(() => localStorage.setItem('zavod7:seenVersion', '9.9.9'));
   const p = await ctx.newPage(); watch(p);
   await p.goto(URL0 + `?render=${mode}&gfx=low`); await ready(p);
+  await startGameplay(p);
   const rmode = await p.evaluate(() => window.__zavod.R.mode);
-  await p.evaluate(() => window.__zavod.ui.close());
+  await p.evaluate(() => { const u = window.__zavod.ui; u.menuReturnTo = null; u.close(); }); // 1.16: без возврата в меню (меню ставит паузу)
   const sc = await W(p, SCENE);
   ok(!!sc && sc.n === 2 && sc.A.cars.length === 2 && sc.B.cars.length === 2, `сцена: путь, станция End, два поезда по 2 вагона (рендер ${rmode}) ${sc ? '' : 'нет места'}`);
   if (!sc || sc.n !== 2) { await p.close(); continue; }
@@ -89,7 +90,7 @@ for (const mode of ['webgl', 'canvas']) {
   ok(await W(p, `return 1;`) && await p.evaluate(() => window.__zavod.R.stat.sigs >= 1), 'светофор нарисован');
   await p.screenshot({ path: `shots/v18-blocks-${mode}-${name}.png` });
   await p.evaluate(() => { window.__zavod.view.cursor = null; });
-  await p.keyboard.press('Escape');
+  await p.keyboard.press('Escape'); await p.evaluate(() => { const u = window.__zavod.ui; if (u.open === 'menu') { u.menuReturnTo = null; u.close(); } }); // 1.16: Escape без окна открывает меню (пауза)
 
   console.log('2. Два поезда: A у End, B ждёт у красного светофора (значок над поездом)');
   await W(p, `for (const [t, rec] of [[${sc.A.cars[0]}, { st: 'End', c: 'time', n: 3600 }], [${sc.B.cars[0]}, { st: 'End', c: 'time', n: 5 }]]) { g.apply({ t: 'sched', id: t, sched: [rec] }); g.apply({ t: 'tmode', id: t, auto: true }); } return 1;`);
@@ -101,7 +102,7 @@ for (const mode of ['webgl', 'canvas']) {
   await p.screenshot({ path: `shots/v18-signal-wait-${mode}-${name}.png` });
   await p.evaluate(id => window.__zavod.ui.toggle('ent', id), sg[0].id); await p.waitForTimeout(500);
   ok(/Красный/.test(await win()) && /Блок №/.test(await win()), 'окно светофора: красный, номер блока');
-  await p.evaluate(() => window.__zavod.ui.close());
+  await p.evaluate(() => { const u = window.__zavod.ui; u.menuReturnTo = null; u.close(); }); // 1.16: без возврата в меню (меню ставит паузу)
 
   console.log('3. Окно станции: лимит поездов кнопками');
   await p.evaluate(id => window.__zavod.ui.toggle('ent', id), sc.sE); await p.waitForTimeout(500);
@@ -110,7 +111,7 @@ for (const mode of ['webgl', 'canvas']) {
   ok(await W(p, `return g.ents.get(${sc.sE}).tlim;`) === 1, 'лимит: + + − → 1');
   await down(p, '[data-act="tlim"][data-d="0"]'); await p.waitForTimeout(350);
   ok(await W(p, `return g.ents.get(${sc.sE}).tlim;`) == null, '∞ — лимит снят');
-  await p.evaluate(() => window.__zavod.ui.close());
+  await p.evaluate(() => { const u = window.__zavod.ui; u.menuReturnTo = null; u.close(); }); // 1.16: без возврата в меню (меню ставит паузу)
 
   console.log('4. Расписание: условие «И груз» кнопками, переключение И/ИЛИ');
   await p.evaluate(id => window.__zavod.ui.toggle('ent', id), sc.A.cars[0]); await p.waitForTimeout(500);
@@ -128,7 +129,7 @@ for (const mode of ['webgl', 'canvas']) {
   await down(p, '[data-act="sj"][data-i="1"]'); await p.waitForTimeout(400);
   ok(!(await W(p, `return g.trains.find(t => t.cars.includes(${sc.A.cars[0]})).sched[0].x[0].j;`)), 'ИЛИ → И (поезд A остаётся у End)');
   await p.screenshot({ path: `shots/v18-sched-${mode}-${name}.png` });
-  await p.evaluate(() => window.__zavod.ui.close());
+  await p.evaluate(() => { const u = window.__zavod.ui; u.menuReturnTo = null; u.close(); }); // 1.16: без возврата в меню (меню ставит паузу)
 
   console.log('5. Цистерна и насос для цистерн: окно, режим, налив');
   const fw = sc.A.cars[1];
@@ -143,11 +144,11 @@ for (const mode of ['webgl', 'canvas']) {
     ok(await W(p, `return g.ents.get(${pp.P}).pm;`) === 1, 'режим «слив»');
     await down(p, '[data-act="tpm"][data-v="0"]'); await p.waitForTimeout(400);
     ok(!await W(p, `return g.ents.get(${pp.P}).pm;`), 'режим «налив»');
-    await p.evaluate(() => window.__zavod.ui.close());
+    await p.evaluate(() => { const u = window.__zavod.ui; u.menuReturnTo = null; u.close(); }); // 1.16: без возврата в меню (меню ставит паузу)
     ok(await until(p, id => (window.__zavod.game.ents.get(id)?.tn || 0) > 1000, fw, 20000), `цистерна наливается (${await W(p, `const P = g.ents.get(${pp.P}), w = g.ents.get(${fw}), T = g.ents.get(${pp.T}); const n = g.fluidNets[P._fn[0]]; return JSON.stringify({ tn: w.tn, cx: w._cx, cy: w._cy, P: [P.x, P.y, P.dir, P.status], n: n && [n.fluid, n.amount, n.cap], same: P._fn[0] === T._fn[0], st: g.trains.map(t => t.st + ':' + t.v), cc: g.carCells.size, at: g.carCells.get(((P.x + 65536) * 131072) + (P.y - 1 + 65536)) });`)})`);
     await p.evaluate(id => window.__zavod.ui.toggle('ent', id), fw); await p.waitForTimeout(500);
     ok(/Вода/.test(await win()) && /25000/.test(await win()), 'окно цистерны: вода, объём');
-    await p.evaluate(() => window.__zavod.ui.close());
+    await p.evaluate(() => { const u = window.__zavod.ui; u.menuReturnTo = null; u.close(); }); // 1.16: без возврата в меню (меню ставит паузу)
   }
 
   console.log('6. EN: окна светофора, станции, поезда, цистерны, насоса без кириллицы');

@@ -1,0 +1,14 @@
+{
+  "observedDate": "2026-10-09",
+  "videoControllers": [
+    {"name": "NVIDIA GeForce RTX 4060 Laptop GPU", "driverVersion": "32.0.16.1714", "status": "OK"},
+    {"name": "Intel(R) UHD Graphics", "driverVersion": "31.0.101.5333", "status": "OK"}
+  ],
+  "windowsPreferences": {
+    "key": "HKCU/Software/Microsoft/DirectX/UserGpuPreferences",
+    "keyPresent": true,
+    "exactChromeOrEdgeExecutableEntries": 0
+  },
+  "limitation": "This read does not exclude global graphics policy, NVIDIA driver preferences or browser policy. The actual game context remained Intel UHD after accepting the high-performance hint.",
+  "mutations": "None. System graphics preferences, drivers and user browser processes were not changed."
+}

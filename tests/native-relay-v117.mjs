@@ -1,0 +1,125 @@
+// A real local TLS termination hop, with a private test CA; TLS checks stay enabled.
+import assert from 'node:assert/strict';
+import { createServer as createNetServer } from 'node:net';
+import { createServer as createHttpsServer, get as httpsGet } from 'node:https';
+import { request as httpRequest } from 'node:http';
+import { spawn, execFileSync } from 'node:child_process';
+import { once } from 'node:events';
+import { mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
+import { basename, join, resolve, sep } from 'node:path';
+import { wsReceiver } from '../node_modules/playwright-core/lib/utilsBundle.js';
+import { createHash, X509Certificate } from 'node:crypto';
+
+export async function startAcceptanceRelay(root, runtime) {
+  const directory = await mkdtemp(join(root, 'relay-smoke-'));
+  const sockets = new Set(), hostSockets = new Set();
+  let child, proxy;
+  const stats = { connections: 0, hostConnections: 0, receivedBytes: 0, sentBytes: 0, hostDisconnects: 0, controls: [] };
+  const cleanup = async () => {
+    for (const socket of sockets) socket.destroy();
+    if (proxy?.listening) await new Promise(resolveClose => proxy.close(resolveClose));
+    if (child && child.exitCode === null && child.signalCode === null) { const done = once(child, 'exit'); child.kill('SIGTERM'); await done; }
+    const actual = await realpath(directory), allowed = await realpath(root);
+    if (!actual.startsWith(allowed + sep) || !basename(actual).startsWith('relay-smoke-')) throw new Error('Unsafe relay cleanup path');
+    await rm(actual, { recursive: true, force: true });
+  };
+  try {
+    const keyPath = join(directory, 'key.pem'), caPath = join(directory, 'cert.pem');
+    execFileSync('C:/Program Files/Git/usr/bin/openssl.exe', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-subj', '/CN=localhost',
+      '-addext', 'subjectAltName=IP:127.0.0.1,DNS:localhost', '-keyout', keyPath, '-out', caPath], { windowsHide: true, stdio: 'pipe' });
+    const ca = await readFile(caPath), key = await readFile(keyPath);
+    const probe = createNetServer(); await new Promise(ok => probe.listen(0, '127.0.0.1', ok));
+    const gatewayPort = probe.address().port; await new Promise(ok => probe.close(ok));
+    proxy = createHttpsServer({ key, cert: ca }, (request, response) => {
+      const forwarded = httpRequest({ hostname: '127.0.0.1', port: gatewayPort, path: request.url, method: request.method, headers: request.headers }, upstream => {
+        response.writeHead(upstream.statusCode, upstream.headers); upstream.pipe(response);
+      });
+      forwarded.on('error', () => { response.writeHead(502); response.end(); }); request.pipe(forwarded);
+    });
+    proxy.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)); });
+    proxy.on('upgrade', (request, socket, head) => {
+      stats.connections++;
+      if (request.url === '/v1/host') { stats.hostConnections++; hostSockets.add(socket); socket.once('close', () => hostSockets.delete(socket)); }
+      const forward = httpRequest({ hostname: '127.0.0.1', port: gatewayPort, path: request.url, headers: request.headers });
+      forward.on('upgrade', (response, upstream, upstreamHead) => {
+        sockets.add(upstream); upstream.once('close', () => sockets.delete(upstream));
+        socket.write('HTTP/1.1 101 Switching Protocols\r\n' + Object.entries(response.headers).map(([key, value]) => `${key}: ${value}\r\n`).join('') + '\r\n');
+        let inbound, outbound;
+        if (request.url === '/v1/host') {
+          const observer = (isServer, direction) => {
+            const receiver = new wsReceiver({ isServer, maxPayload: 8 * 1024 * 1024 });
+            receiver.on('error', () => {});
+            receiver.on('message', data => { try { const message = JSON.parse(String(data));
+              if (message.type !== 'guest-data') { stats.controls.push({ direction, type: message.type, ...(message.type === 'error' ? { code: message.code, message: message.message } : {}) }); if (stats.controls.length > 24) stats.controls.shift(); }
+            } catch {} }); return receiver;
+          };
+          inbound = observer(true, 'host'); outbound = observer(false, 'gateway');
+        }
+        // Receiver unmasks frames in place. Its observation copy must never
+        // alter the bytes that the real proxy forwards to either endpoint.
+        if (upstreamHead.length) { outbound?.write(Buffer.from(upstreamHead)); socket.write(upstreamHead); } if (head.length) { inbound?.write(Buffer.from(head)); upstream.write(head); }
+        socket.on('data', data => inbound?.write(Buffer.from(data))); upstream.on('data', data => outbound?.write(Buffer.from(data)));
+        socket.on('data', data => { stats.receivedBytes += data.length; }); upstream.on('data', data => { stats.sentBytes += data.length; });
+        socket.on('error', () => upstream.destroy()); upstream.on('error', () => socket.destroy());
+        socket.on('close', () => upstream.destroy()); upstream.on('close', () => socket.destroy());
+        socket.pipe(upstream); upstream.pipe(socket);
+      });
+      forward.on('response', response => { socket.end(`HTTP/1.1 ${response.statusCode} Rejected\r\nConnection: close\r\n\r\n`); response.resume(); });
+      forward.on('error', () => socket.destroy()); forward.end();
+    });
+    await new Promise(ok => proxy.listen(0, '127.0.0.1', ok));
+    const origin = `https://127.0.0.1:${proxy.address().port}`;
+    const startGateway = async () => {
+      child = spawn(runtime, [resolve('dist/native/relay-gateway.mjs')], { cwd: resolve('dist/native'), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env,
+        ...(process.argv.includes('--render-env')
+          ? { ZAVOD_RELAY_PUBLIC_ORIGIN: '', ZAVOD_RELAY_PORT: '', RENDER_EXTERNAL_URL: origin, PORT: String(gatewayPort) }
+          : { ZAVOD_RELAY_PUBLIC_ORIGIN: origin, ZAVOD_RELAY_PORT: String(gatewayPort), RENDER_EXTERNAL_URL: 'https://unused.invalid', PORT: '1' }),
+        ZAVOD_RELAY_REGISTRATION: 'public', ZAVOD_RELAY_HOST_TOKEN: '', ZAVOD_RELAY_TRUST_PROXY: '0' } });
+      await new Promise((ok, fail) => {
+      const timer = setTimeout(() => fail(new Error('Packaged relay readiness timeout')), 15000);
+      child.once('error', error => { clearTimeout(timer); fail(error); });
+      child.once('exit', code => { clearTimeout(timer); fail(new Error('Packaged relay exited before readiness: ' + code)); });
+      child.stdout.on('data', chunk => { if (String(chunk).includes('relay gateway is listening')) { clearTimeout(timer); ok(); } });
+      });
+    };
+    await startGateway();
+    const request = (url, headers = {}) => new Promise((ok, fail) => {
+      const request = httpsGet(url, { ca, headers, timeout: 10000 }, response => {
+        const chunks = []; let bytes = 0;
+        response.on('data', chunk => { bytes += chunk.length; if (bytes > 8 * 1024 * 1024) response.destroy(new Error('Relay response bound')); else chunks.push(chunk); });
+        response.on('error', fail); response.on('end', () => { const text = Buffer.concat(chunks).toString('utf8'); ok({ status: response.statusCode, json: async () => JSON.parse(text), text: async () => text }); });
+      });
+      request.on('error', fail); request.on('timeout', () => request.destroy(new Error('TLS relay request timeout')));
+    });
+    assert.equal((await request(origin + '/')).status, 200);
+    assert.equal((await request(origin + '/', { Origin: 'https://untrusted.invalid' })).status, 403);
+    const certificatePin = createHash('sha256').update(new X509Certificate(ca).publicKey.export({ type: 'spki', format: 'der' })).digest('base64');
+    return { origin, ca, caPath, certificatePin, hostUrl: origin.replace(/^https/, 'wss') + '/v1/host', request, stats,
+      async restart() { const done = once(child, 'exit'); child.kill('SIGTERM'); await done; await startGateway(); },
+      dropHost() { assert.ok(hostSockets.size); stats.hostDisconnects++; for (const socket of hostSockets) socket.destroy(); }, stop: cleanup };
+  } catch (error) { await cleanup(); throw error; }
+}
+
+export async function acceptRelayLanding(browser, relay, getStatus) {
+  const invitation = (await getStatus()).invite;
+  for (const value of [invitation.code, invitation.relay.roomCode]) {
+    const context = await browser.newContext();
+    const errors = [];
+    try {
+      await context.addInitScript(() => localStorage.setItem('zavod7:settings', JSON.stringify({ lang: 'en', simWorker: true, tips: false, leaveGuard: false })));
+      const page = await context.newPage(); page.on('pageerror', error => errors.push(error.message));
+      await page.goto(relay.origin);
+      await page.locator('#code').fill(value); await page.locator('#go').click();
+      await page.waitForURL(url => /^\/r\/[A-HJ-NP-Z2-9]{10}\/$/.test(url.pathname) && /^#server-invite=[A-Za-z0-9_-]{32,128}$/.test(url.hash), { timeout: 15000 });
+      await page.waitForFunction(() => window.__zavod?.game?.seed === 1171910, null, { timeout: 45000 });
+      assert.equal(await page.evaluate(() => window.__zavod.game.inv.count('copper-plate')), 0, 'guest never inherits owner inventory');
+      assert.deepEqual(errors, []);
+      assert.equal((await getStatus()).world.players, 1, 'actual browser guest joins through the invitation page');
+    } finally { await context.close(); }
+    const deadline = performance.now() + 35000;
+    while ((await getStatus()).world.players && performance.now() < deadline) await new Promise(ok => setTimeout(ok, 100));
+    assert.equal((await getStatus()).world.players, 0, 'temporary browser guest leaves after its transport grace period');
+  }
+  console.log('✔ real Chromium relay landing: copied full invitation and short code both join as independent guests');
+}

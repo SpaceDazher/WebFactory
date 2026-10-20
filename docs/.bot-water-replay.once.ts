@@ -1,0 +1,13 @@
+import fs from 'node:fs';
+import { deserialize } from '../src/sim/save';
+import { Plan, routePipe, key, type RouteSearchStats } from '../tools/bot/map';
+const d=JSON.parse(fs.readFileSync('integration-logs/continuation-2/water-failure.json','utf8'));
+const g=deserialize(d.game), p=new Plan(g);
+for (const prop of ['tile','front','ports'] as const) (p[prop] as any)=new Map(d.plan[prop]);
+p.keep=new Set(d.plan.keep);p.tunnel=new Set(d.plan.tunnel);
+const stats={} as RouteSearchStats;
+const now=Date.now();
+const route=routePipe(p,d.net,d.x,d.y,new Set(d.targets.map(([x,y]:number[])=>key(x,y))),{stats});
+const report={...stats,milliseconds:Date.now()-now,entities:route?.ents.length??null};
+fs.writeFileSync('integration-logs/continuation-2/route-replay-before.json',JSON.stringify(report,null,2));
+console.log(report);

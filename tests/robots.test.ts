@@ -41,7 +41,8 @@ const sameItems = (a: Record<string, number>, b: Record<string, number>) => [...
 
 console.log('1. Сети робопортов (union-find по зонам логистики), пространственный индекс');
 {
-  const g = fresh(); const A = land(g, 300, 300, 4, 4);
+  // Все три заданные позиции должны быть сушей, а не только первый порт.
+  const g = fresh(); const A = land(g, 300, 300, 204, 4);
   const a = port(g, A.x, A.y), b = port(g, A.x + 40, A.y), c = port(g, A.x + 200, A.y);
   const I = roboIndex(g);
   ok(I.nets.length === 2 && I.netOf.get(a.id) === I.netOf.get(b.id) && I.netOf.get(c.id) !== I.netOf.get(a.id), `сетей: ${I.nets.length} (порты в 40 клетках — одна сеть, в 200 — отдельная)`);

@@ -1,52 +1,102 @@
 // Рендер на Canvas2D (прототип по 14.1: «Canvas2D и одна нить»). Слои по 14.7.
-import { CHUNK, DX, DY, ckey } from '../core/types';
+import { CHUNK, DX, DY, TICKS, ckey, type Dir } from '../core/types';
 import { hash2 } from '../core/rng';
-import { PROTOS, FLOORS, FLOOR_BY_ITEM, brushOrigin } from '../data/entities';
+import { PROTOS, FLOORS, FLOOR_BY_ITEM, brushOrigin, TurDef } from '../data/entities';
 import { ITEMS } from '../data/items';
+import { validNoteIcon } from '../sim/notes';
+import { dayInfo } from '../sim/daytime';
 import { RECIPES } from '../data/recipes';
 import { Game, Entity } from '../sim/game';
 import { Chunk, D_ROCK, D_TREE, RES_ITEMS, T_DEEP, T_SHALLOW } from '../sim/world';
 import { beltItemPos } from '../sim/belts';
 import { fluidConns } from '../sim/networks';
+import { drawFluidPorts } from './fluidports';
+import { wallConnAtlasKey, wallConnMask } from './wall-connections';
+import { heatTemp, heatPorts, isHeatType } from '../sim/heat';
 import { drawEntityArt, itemIcon, shade, wireColor, colorblind, ArtState } from './art';
 import { drawRail, drawCar, drawSignal, railPaths } from './rails';
 import { graph as railGraph, isChain } from '../sim/trains';
 import { shapeOf } from '../sim/railgeo';
 import { PROTOS as _P } from '../data/entities';
 import { tr } from '../core/i18n';
+import { BIO_V117_SOURCES } from '../data/biomaterials';
 import { Batch, CanvasBatch, GLBatch, rgba } from './batch';
 import { drawItemIcon, drone } from './art';
 import { robotView, ROBOT_STRIDE } from '../sim/robots';
-import { wireEnds, WIRE_SAG, termPos } from '../sim/circuits';
+import { wireEnds, WIRE_SAG, termPos, WIRE_REACH } from '../sim/circuits';
 import { ITEM_IDX } from '../data/items';
 import { ITEM_IDS } from '../data/items';
-import { buildGeo, drawGeo, ChunkGeo } from './terrain';
+import { buildGeo, drawGeo, terrainCacheKey, ChunkGeo } from './terrain';
 import { oreSprite, treeSprite, rockSprite, oilSprite } from './sprites';
 import { texReady } from './textures';
-import { UNITS, Unit } from '../sim/enemies';
+import { UNITS, Unit, unitMax } from '../sim/enemies';
+import { drawHero, HeroLook } from './heroart';
+import { drawSwarmStructure, drawSwarmUnit } from './swarmart';
+import { drawItemIcon2 as _di2, floorPattern } from './art2';
+import { curGun } from '../sim/combat';
 import { World, R_OIL } from '../sim/world';
+import { drawCreepTile } from './creep-art';
 import type { Blueprint } from '../sim/blueprint';
 import { bpEntDims } from '../sim/blueprint';
+import { bioProfile, bioCorpseRenderGroups } from '../sim/bio';
+import { DRONE_MODELS, bioFoodSeconds } from '../sim/v117';
+import type { BioRenderGroup } from '../sim/bio';
 
 const TS = 16; // пикселей на клетку в кеше поверхности
+const recipeArtItem = (rid: string | null | undefined) => rid ? RECIPES[rid]?.out[0]?.[0] || RECIPES[rid]?.in[0]?.[0] : undefined;
 const TERRAIN_COL = ['#56703a', '#c4a86e', '#857b6c', '#3f7898', '#275475'];
 /** v1.9: порог масштаба карты издалека (LOD) — тот же, что у прежнего «режима карты» */
 export const LOD_ZOOM = 0.3;
 const rgbCache = new Map<string, number[]>();
 const lodRgb = (h: string) => { let c = rgbCache.get(h); if (!c) { const n = parseInt(h.slice(1), 16); c = [n >> 16, (n >> 8) & 255, n & 255]; rgbCache.set(h, c); } return c; };
 const LOD_T = TERRAIN_COL.map(lodRgb), LOD_TREE = [40, 72, 32], LOD_NEST = [220, 40, 90], LOD_UNK = [140, 140, 140];
-export const STATUS_TEXT: Record<string, string> = {
-  disabled: 'Выключено условием',
-  working: 'Работает', idle: 'Ожидание', 'no-robots': 'Нет роботов', 'no-power': 'Нет энергии', 'low-power': 'Мало энергии', 'no-fuel': 'Нет топлива', 'no-input': 'Нет ингредиентов',
-  'output-full': 'Выход забит', 'no-recipe': 'Нет рецепта', 'no-ore': 'Нет руды', 'no-research': 'Нет исследования', 'no-water': 'Нет воды', 'no-target': 'Нет цели', waiting: 'Ждёт предмет', 'no-ammo': 'Нет патронов', 'fluid-mix': 'Смешаны жидкости', launching: 'Запуск ракеты', 'no-satellite': 'Нет спутника', charging: 'Заряжается', discharging: 'Разряжается',
-};
+const BIO_ART_COLORS: Record<string, string> = { crawler: '#8d7654', spitter: '#8da34e', armored: '#60777a', destroyer: '#b74e3b', flyer: '#788bd0', brood: '#b45c94', giant: '#657f4e', queen: '#bf4d99', worm: '#a5a84f' };
+function paintBioRemains(c: CanvasRenderingContext2D, x: number, y: number, s: number, kind: string, count: number, mapMode = false) {
+  const family = bioProfile(kind)?.family || 'crawler', color = BIO_ART_COLORS[family] || '#8d7654';
+  if (mapMode || s < 5) { c.fillStyle = color; c.beginPath(); c.arc(x, y, Math.max(1.5, s * .18), 0, Math.PI * 2); c.fill(); return; }
+  c.save(); c.translate(x, y); c.scale(s, s);
+  c.fillStyle = 'rgba(8,10,9,.45)'; c.beginPath(); c.ellipse(.02, .16, .37, .17, -.08, 0, Math.PI * 2); c.fill();
+  c.fillStyle = color; c.strokeStyle = '#242724'; c.lineWidth = .055; c.lineCap = 'round';
+  if (family === 'flyer') {
+    c.beginPath(); c.moveTo(-.05, -.05); c.lineTo(-.44, -.31); c.lineTo(-.29, .09); c.lineTo(.04, .12); c.closePath(); c.fill(); c.stroke();
+    c.beginPath(); c.moveTo(.06, -.04); c.lineTo(.44, -.29); c.lineTo(.31, .1); c.lineTo(.01, .12); c.closePath(); c.fill(); c.stroke();
+  } else {
+    c.beginPath(); c.ellipse(0, 0, family === 'giant' || family === 'queen' ? .37 : .31, .21, -.08, 0, Math.PI * 2); c.fill(); c.stroke();
+    c.beginPath(); c.ellipse(.23, -.06, .13, .115, -.2, 0, Math.PI * 2); c.fill(); c.stroke();
+  }
+  if (family === 'armored') { c.strokeStyle = 'rgba(25,32,37,.9)'; c.lineWidth = .045; for (const q of [-.17, -.02, .13]) { c.beginPath(); c.moveTo(q, -.17); c.lineTo(q + .03, .16); c.stroke(); } }
+  if (family === 'queen' || family === 'brood') { c.fillStyle = family === 'queen' ? '#e194bd' : '#e29ac1'; for (const q of [-.2, 0, .2]) { c.beginPath(); c.arc(q, -.25, .075, 0, Math.PI * 2); c.fill(); } }
+  if (family === 'worm') { c.strokeStyle = '#454c2a'; c.lineWidth = .055; for (const q of [-.16, -.02, .12]) { c.beginPath(); c.moveTo(q, -.13); c.lineTo(q + .02, .13); c.stroke(); } }
+  if (family === 'destroyer') { c.fillStyle = '#e99b50'; c.beginPath(); c.arc(-.04, -.02, .085, 0, Math.PI * 2); c.fill(); }
+  c.restore();
+}
+function bioBadge(c: CanvasRenderingContext2D, x: number, y: number, s: number, count: number) {
+  if (count < 2 || s < 12) return;
+  const label = `×${count}`; c.save(); c.font = `bold ${Math.max(9, Math.min(14, s * .48))}px system-ui,sans-serif`; c.textAlign = 'center'; c.textBaseline = 'middle';
+  const w = c.measureText(label).width + 6, h = Math.max(13, s * .48); c.fillStyle = 'rgba(12,16,13,.88)'; c.fillRect(x - w / 2, y - h / 2, w, h);
+  c.fillStyle = '#f2e8c7'; c.fillText(label, x, y); c.restore();
+}
+import { STATUS_TEXT } from '../data/statusText'; export { STATUS_TEXT };
 /** v1.6: короткая запись значения сигнала: 1234, 12.3k, −4.5M */
 export function fmtSig(v: number) { const a = Math.abs(v), m = v < 0 ? '−' : ''; return a < 10000 ? m + a : a < 1e6 ? m + (a / 1000).toFixed(a < 1e5 ? 1 : 0) + 'k' : m + (a / 1e6).toFixed(a < 1e8 ? 1 : 0) + 'M'; }
+/** v1.16: значки статуса — задержка показа и минимальный интервал смены, тиков; всегда видимые (критические) статусы */
+const STAT_HOLD = 60;
+const CRIT_STATUS = new Set(['no-power', 'emergency', 'overheat']);
 export interface View {
+  fluidSelection?: number;
+  fluidFocus?: { entity: number; tank: number } | null;
+  /** v1.16: слой радиусов турелей: 0 — выкл., 1 — наведённая турель, 2 — все видимые */ ranges?: 0 | 1 | 2;
+  /** Сторона станции относительно направления движения при размещении. */
+  stationLeft?: boolean;
   zoom: number; cursor: string | null; rot: number; alt: boolean; mouseX: number; mouseY: number; mouseIn: boolean;
+  /** v1.16: bounded wall-grid drag preview */
+  wallPlan?: { proto: string; positions: { x: number; y: number; ok: boolean | null; reason?: string }[]; overflow: boolean; ghost: boolean; label: string } | null;
+  polePlan?: { anchor: import('../sim/polechain').PoleNode | null; next: { x: number; y: number; w: number; h: number; proto: string; dir: Dir; ok: boolean; ghost: boolean; shortened: boolean } | null; label: string } | null;
   hoverEnt: Entity | null; ghostOk: { ok: boolean; reason?: string } | null; ghostPos: [number, number] | null; debug: boolean;
-  /** v1.7: план пути под курсором (рельсы в руке): куски, начало, конец, можно ли уложить, подпись; призрак вагона на рельсах */
-  railPlan?: { pieces: { proto: string; x: number; y: number; dir: number; have?: boolean }[]; start: [number, number] | null; end: [number, number]; ok: boolean; label?: string } | null;
+  /** 1.17: active friendly actors under the pointer and the last world-selected combat drone. */
+  hoverDroneId?: number | null; selectedDroneId?: number | null;
+  /** v1.16: план 1–4 железнодорожных линий: узлы, доступность и прогноз призрачных сегментов */
+  railPlan?: { pieces: { proto: string; x: number; y: number; dir: number; have?: boolean; valid?: boolean; ghost?: boolean }[]; lanes?: { sx: number; sy: number; ex: number; ey: number }[]; start: [number, number] | null; end: [number, number]; ok: boolean; label?: string; hint?: string } | null;
   carGhost?: { proto: string; x: number; y: number; dx: number; dy: number; ok: boolean; reason?: string } | null;
   pollution?: boolean; smoke?: boolean; noNight?: boolean;
   /** чертёж в руке и его позиция; инструмент выделения и текущая рамка */
@@ -54,17 +104,20 @@ export interface View {
   /** v1.5: первая постройка провода (провод в руке) */ wireFrom?: number | null; /** v1.6: клемма первой постройки; провод под курсором (индекс g.cw) */ wireFromT?: 0 | 1; hoverWire?: number;
   /** v1.2: показать зоны робопортов (выбран робопорт или призрак, открыто окно робопорта) */ zones?: boolean;
   /** v1.4: размер кисти покрытий (когда в руке бетон / кирпич) */ brush?: number;
-  tool?: 'copy' | 'cut' | 'decon' | 'upgrade' | 'cancel' | null; sel?: { x0: number; y0: number; x1: number; y1: number; cancel?: boolean } | null;
+  /** v1.16: подсветка прямоугольников на карте (до момента until, мс) */ hl?: { x: number; y: number; w: number; h: number; until: number }[] | null;
+  tool?: 'copy' | 'cut' | 'decon' | 'upgrade' | 'cancel' | 'group' | null; sel?: { x0: number; y0: number; x1: number; y1: number; cancel?: boolean } | null;
 }
-const TOOL_COL: Record<string, [string, string]> = { copy: ['rgba(80,170,255,.15)', '#58b0ff'], cut: ['rgba(255,170,60,.15)', '#ffaa3c'], decon: ['rgba(240,60,60,.15)', '#f04848'], upgrade: ['rgba(80,220,110,.15)', '#4be36b'], cancel: ['rgba(120,190,255,.12)', '#9ac8ff'] };
+const TOOL_COL: Record<string, [string, string]> = { copy: ['rgba(80,170,255,.15)', '#58b0ff'], cut: ['rgba(255,170,60,.15)', '#ffaa3c'], decon: ['rgba(240,60,60,.15)', '#f04848'], upgrade: ['rgba(80,220,110,.15)', '#4be36b'], cancel: ['rgba(120,190,255,.12)', '#9ac8ff'], group: ['rgba(255,220,80,.14)', '#ffd84a'] };
 export class Renderer {
   ctx: CanvasRenderingContext2D; mainCtx: CanvasRenderingContext2D; dark: HTMLCanvasElement;
   /** режим среднего слоя: webgl — WebGL2-пакет, canvas — спрайты из атласа на Canvas2D, legacy — векторная отрисовка каждый кадр */
   mode: 'webgl' | 'canvas' | 'legacy' = 'legacy'; modeNote = ''; batch: Batch | null = null; glCanvas: HTMLCanvasElement | null = null; topCanvas: HTMLCanvasElement | null = null; topCtx: CanvasRenderingContext2D | null = null;
+  private webglEvents: { canvas: HTMLCanvasElement; lost: (event: Event) => void; restored: () => void } | null = null;
   /** для замеров: 1 — не рисовать поверхность, 2 — не рисовать верхний слой */
   skip = 0;
   stat = { mid: 0, quads: 0, rast: 0, rastMs: 0, evict: 0, robots: 0, badges: 0, floors: 0, cwires: 0, conds: 0, rails: 0, cars: 0, blk: 0, sigs: 0, ticons: 0, lod: 0 };
-  cache = new Map<number, { cv: HTMLCanvasElement; ver: number; used: number }>();
+  cache = new Map<number, { cv: HTMLCanvasElement; ver: number; terrainKey?: string; used: number }>();
+  private bioBadges: BioRenderGroup[] = [];
   frame = 0; camX = 0; camY = 0; W = 0; H = 0; s = 32;
   geo = new Map<number, ChunkGeo>(); world: World | null = null; texWas = false;
   /** привязка к миру: сброс кешей и инвалидация соседей при генерации новых чанков (контуры берегов зависят от соседей) */
@@ -75,27 +128,50 @@ export class Renderer {
   }
   private geoFor(w: World, c: Chunk): ChunkGeo {
     const k = ckey(c.cx, c.cy); let g = this.geo.get(k);
-    if (!g) { g = buildGeo(w, c); this.geo.set(k, g); if (this.geo.size > 200) { let oldK = -1, oldU = Infinity; for (const [kk, v] of this.geo) if (v.used < oldU) { oldU = v.used; oldK = kk; } this.geo.delete(oldK); } }
+    if (!g || g.ver !== c.version || g.terrainKey !== terrainCacheKey(w, c)) { g = buildGeo(w, c); this.geo.set(k, g); if (this.geo.size > 200) { let oldK = -1, oldU = Infinity; for (const [kk, v] of this.geo) if (v.used < oldU) { oldU = v.used; oldK = kk; } this.geo.delete(oldK); } }
     g.used = this.frame; return g;
   }
   /** v1.9: карта издалека (LOD) — при масштабе < LOD_ZOOM чанк рисуется одной картинкой 32×32 (1 пиксель = клетка: земля,
    *  руда, деревья, постройки цветом прототипа), пересобирается по версии чанка (постройка/снос меняют occ и версию).
    *  Постройки по одной не перебираются, предметы на лентах и быстрые поля Worker в этом режиме не присылает. */
-  lod = true; lodCache = new Map<number, { cv: HTMLCanvasElement; ver: number; used: number; miss: boolean }>(); lodBuilt = 0;
+  lod = true; lodCache = new Map<number, { cv: HTMLCanvasElement; ver: number; ov: number; av: number; cvv: number; ev: number; ids: number[]; esig: string; used: number; miss: boolean }>(); lodBuilt = 0;
+  private lodWorld: World | null = null;
+  private lodEntitySignature(g: Game, ids: number[]) {
+    return ids.map(id => {
+      const e = g.ents.get(id);
+      return e ? `${id}:${e.proto}:${e.t}:${e.x}:${e.y}:${e.w}:${e.h}` : `${id}:?`;
+    }).join(';');
+  }
   private lodCanvas(g: Game, ch: Chunk): HTMLCanvasElement {
+    if (this.lodWorld !== g.world) { this.lodWorld = g.world; this.lodCache.clear(); }
     const k = ckey(ch.cx, ch.cy); let e = this.lodCache.get(k);
-    if (e && e.ver === ch.version && !(e.miss && (this.frame + k) % 30 === 0)) { e.used = this.frame; return e.cv; }
+    const ov = ch.ov || 0, av = ch.av || 0, cvv = ch.cv || 0, ev = (g.ents as any).ver || 0;
+    let entitiesChanged = false;
+    if (e && e.ev !== ev) {
+      const esig = this.lodEntitySignature(g, e.ids);
+      entitiesChanged = esig !== e.esig;
+      if (!entitiesChanged) e.ev = ev;
+    }
+    if (e && e.ver === ch.version && e.ov === ov && e.av === av && e.cvv === cvv && !entitiesChanged && !(e.miss && (this.frame + k) % 30 === 0)) { e.used = this.frame; return e.cv; }
     const cv = e?.cv || document.createElement('canvas'); cv.width = cv.height = CHUNK;
-    const x = cv.getContext('2d')!; const img = x.createImageData(CHUNK, CHUNK); const d = img.data; let miss = false;
+    const x = cv.getContext('2d')!; const img = x.createImageData(CHUNK, CHUNK); const d = img.data; let miss = false; const entityIds = new Set<number>();
     for (let i = 0; i < CHUNK * CHUNK; i++) {
       let c = LOD_T[ch.terrain[i]] || LOD_T[0]; const id = ch.occ[i];
-      if (id >= 0) { const en = g.ents.get(id); if (en) c = en.t === 'nest' ? LOD_NEST : lodRgb(PROTOS[en.proto]?.color || '#888888'); else { miss = true; c = LOD_UNK; } }
+      if (id >= 0) { entityIds.add(id); const en = g.ents.get(id); if (en) c = en.t === 'nest' ? LOD_NEST : lodRgb(PROTOS[en.proto]?.color || '#888888'); else { miss = true; c = LOD_UNK; } }
       else if (ch.amt[i] > 0 && ch.res[i]) c = lodRgb(ITEMS[RES_ITEMS[ch.res[i]]]?.color || '#000000');
       else if (ch.decor[i] === D_TREE) c = LOD_TREE;
-      const o = i * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255;
+      const o = i * 4, strength = id < 0 ? ch.creep?.[i] || 0 : 0;
+      if (strength) {
+        const blend = .42 + .28 * (strength / 255);
+        d[o] = c[0] * (1 - blend) + 112 * blend | 0;
+        d[o + 1] = c[1] * (1 - blend) + 58 * blend | 0;
+        d[o + 2] = c[2] * (1 - blend) + 105 * blend | 0;
+      } else { d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; }
+      d[o + 3] = 255;
     }
     x.putImageData(img, 0, 0); this.lodBuilt++;
-    this.lodCache.set(k, { cv, ver: ch.version, used: this.frame, miss });
+    const ids = [...entityIds];
+    this.lodCache.set(k, { cv, ver: ch.version, ov, av, cvv, ev, ids, esig: this.lodEntitySignature(g, ids), used: this.frame, miss });
     if (this.lodCache.size > 4096) { const old = [...this.lodCache.entries()].sort((a, b) => a[1].used - b[1].used).slice(0, 512); for (const [kk] of old) this.lodCache.delete(kk); }
     return cv;
   }
@@ -106,10 +182,54 @@ export class Renderer {
   resetArt() { const a = this.batch?.atlas; if (a) { a.slots.clear(); a.byBase.clear(); for (const pg of a.pages) { pg.keys = []; pg.shelves = []; pg.top = 0; } } this.cache.clear(); this.geo.clear(); }
   pixelRatio() { return Math.max(0.25, Math.min(window.devicePixelRatio || 1, this.dprMax) * this.resScale); }
   constructor(public canvas: HTMLCanvasElement) { this.ctx = this.mainCtx = canvas.getContext('2d')!; this.dark = document.createElement('canvas'); }
+  private clearWebGLSurfaces() {
+    const glCanvas = this.glCanvas;
+    const events = this.webglEvents;
+    if (events) {
+      events.canvas.removeEventListener('webglcontextlost', events.lost);
+      events.canvas.removeEventListener('webglcontextrestored', events.restored);
+      this.webglEvents = null;
+    }
+    if (glCanvas) {
+      try {
+        const gl = glCanvas.getContext('webgl2');
+        if (gl && !gl.isContextLost()) gl.getExtension('WEBGL_lose_context')?.loseContext();
+      } catch { /* снятие поверхности не должно блокировать переход режима */ }
+      glCanvas.remove(); this.glCanvas = null;
+    }
+    if (this.topCanvas) { this.topCanvas.remove(); this.topCanvas = null; this.topCtx = null; }
+  }
+  private watchWebGL(glCanvas: HTMLCanvasElement, topCanvas: HTMLCanvasElement) {
+    const lost = (event: Event) => {
+      if (this.glCanvas !== glCanvas || this.webglEvents?.canvas !== glCanvas) return;
+      event.preventDefault(); // разрешить браузеру восстановить этот же context
+      this.mode = 'canvas'; this.modeNote = 'lost'; this.batch = new CanvasBatch(this.mainCtx); this.ctx = this.mainCtx;
+      glCanvas.style.display = 'none'; topCanvas.style.display = 'none';
+      if (this.topCtx) this.topCtx.clearRect(0, 0, topCanvas.width, topCanvas.height);
+    };
+    const restored = () => {
+      if (this.glCanvas !== glCanvas || this.webglEvents?.canvas !== glCanvas || this.modeNote !== 'lost') return;
+      try {
+        const gl = glCanvas.getContext('webgl2');
+        if (!gl || gl.isContextLost()) throw new Error('restored WebGL2 context is unavailable');
+        // All GL objects, the array texture, the VAO and the atlas slots were invalidated by loss.
+        // A new batch rebuilds them as a single operation; game and Worker state stay untouched.
+        this.batch = new GLBatch(gl); this.mode = 'webgl'; this.modeNote = '';
+        glCanvas.style.display = 'block'; topCanvas.style.display = 'block';
+      } catch (error) {
+        console.warn('WebGL восстановить не удалось; используется Canvas2D', error);
+        this.mode = 'canvas'; this.modeNote = 'restore-failed'; this.batch = new CanvasBatch(this.mainCtx); this.ctx = this.mainCtx;
+        this.clearWebGLSurfaces();
+      }
+    };
+    glCanvas.addEventListener('webglcontextlost', lost);
+    glCanvas.addEventListener('webglcontextrestored', restored);
+    this.webglEvents = { canvas: glCanvas, lost, restored };
+  }
   /** выбрать рендер среднего слоя; WebGL2 недоступен — откат на Canvas2D-атлас */
   setMode(m: 'auto' | 'webgl' | 'canvas' | 'legacy'): string {
     this.modeNote = ''; const auto = m === 'auto'; if (auto) m = 'webgl';
-    if (this.glCanvas) { this.glCanvas.remove(); this.glCanvas = null; } if (this.topCanvas) { this.topCanvas.remove(); this.topCanvas = null; this.topCtx = null; }
+    this.clearWebGLSurfaces();
     this.batch = null; this.mode = m as any;
     if (m === 'webgl') {
       const mk = () => { const cv = document.createElement('canvas'); cv.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;display:block;pointer-events:none'; this.canvas.after(cv); return cv; };
@@ -117,17 +237,59 @@ export class Renderer {
       top.remove(); gl.after(top);
       let b: GLBatch | null = null; try { b = GLBatch.create(gl); } catch (e) { console.warn('WebGL2 недоступен', e); b = null; }
       if (b && auto && GLBatch.isSoftware(b.gl)) { this.modeNote = 'soft'; b.gl.getExtension('WEBGL_lose_context')?.loseContext(); b = null; }
-      if (b) { this.batch = b; this.glCanvas = gl; this.topCanvas = top; this.topCtx = top.getContext('2d')!; }
+      if (b) { this.batch = b; this.glCanvas = gl; this.topCanvas = top; this.topCtx = top.getContext('2d')!; this.watchWebGL(gl, top); }
       else { if (!this.modeNote) this.modeNote = 'nogl'; gl.remove(); top.remove(); this.mode = m = 'canvas'; }
     }
     if (m === 'canvas') this.batch = new CanvasBatch(this.mainCtx);
     return this.mode;
   }
+  private stSt = new Map<number, { sh: string | null; c: string | null; cs: number; ss: number }>();
+  /** стабилизация значка статуса: кандидат должен продержаться STAT_HOLD тиков, а показанное значение — не меняться чаще STAT_HOLD тиков */
+  private stableStatus(g: Game, id: number, cand: string | null): string | null {
+    let o = this.stSt.get(id); if (!o) { o = { sh: cand, c: cand, cs: g.tick, ss: g.tick }; this.stSt.set(id, o); return cand; }
+    if (o.c !== cand) { o.c = cand; o.cs = g.tick; }
+    if (o.sh !== o.c && g.tick - o.cs >= STAT_HOLD && g.tick - o.ss >= STAT_HOLD) { o.sh = o.c; o.ss = g.tick; }
+    if (this.frame % 900 === 0 && this.stSt.size > 2000) for (const k of this.stSt.keys()) if (!g.ents.has(k)) this.stSt.delete(k);
+    return o.sh;
+  }
+  /** v1.16: Alt-режим тепла. Цвет — температура (синий → красный), штриховка от 500 °C и ▲ от 900 °C различимы без цвета;
+   *  кольца портов: зелёное — связь есть, красное — сосед есть, но порт не совпал, серое — свободный порт. */
+  private drawHeatAlt(g: Game, c: CanvasRenderingContext2D, sx: (n: number) => number, sy: (n: number) => number, s: number, x0: number, y0: number, x1: number, y1: number, v: View) {
+    const col = (T: number) => { const k = Math.max(0, Math.min(1, (T - 15) / 1185)); return `hsla(${Math.round(220 - 220 * k)},90%,55%,.42)`; };
+    const portRing = (p: { x: number; y: number; d: number }, ghost: boolean) => {
+      const nx = p.x + DX[p.d], ny = p.y + DY[p.d], n = g.entAt(nx, ny); let st = 0; // 0 свободно, 1 связь, 2 не совпало
+      if (n && isHeatType(n.t)) st = heatPorts(n).some(q => q.x === nx && q.y === ny && q.d === (p.d + 2) % 4) ? 1 : 2;
+      const px = sx(p.x + .5 + DX[p.d] * .5), py = sy(p.y + .5 + DY[p.d] * .5), r = Math.max(2.5, s * .13);
+      c.lineWidth = Math.max(1.5, s * .06); c.strokeStyle = st === 1 ? '#3fe06a' : st === 2 ? '#ff4a3a' : ghost ? '#cfd6dd' : 'rgba(180,190,200,.7)'; c.fillStyle = st === 1 ? 'rgba(63,224,106,.5)' : 'rgba(0,0,0,.35)';
+      c.beginPath(); c.arc(px, py, r, 0, Math.PI * 2); c.fill(); c.stroke();
+      if (st === 2) { c.beginPath(); c.moveTo(px - r, py - r); c.lineTo(px + r, py + r); c.moveTo(px + r, py - r); c.lineTo(px - r, py + r); c.stroke(); }
+    };
+    c.save(); let n = 0;
+    for (const e of g.ents.values()) {
+      if (!isHeatType(e.t) || e.x + e.w < x0 || e.x > x1 || e.y + e.h < y0 || e.y > y1) continue; if (++n > 400) break;
+      const T = heatTemp(e); c.fillStyle = col(T); c.fillRect(sx(e.x), sy(e.y), e.w * s, e.h * s);
+      if (T >= 500) { c.save(); c.beginPath(); c.rect(sx(e.x), sy(e.y), e.w * s, e.h * s); c.clip(); c.strokeStyle = 'rgba(0,0,0,.35)'; c.lineWidth = 1.5; const st = Math.max(5, s * .3); for (let k = -e.h * s; k < e.w * s + e.h * s; k += st) { c.beginPath(); c.moveTo(sx(e.x) + k, sy(e.y) + e.h * s); c.lineTo(sx(e.x) + k + e.h * s, sy(e.y)); c.stroke(); } c.restore(); }
+      for (const p of heatPorts(e)) portRing(p, false);
+      if (s >= 14 || e.w * s >= 40) { c.font = `bold ${Math.max(9, Math.min(15, s * .42))}px system-ui,sans-serif`; c.textAlign = 'center'; c.textBaseline = 'middle'; const lab = `${T >= 900 ? '▲' : ''}${Math.round(T)}°`; const cx = sx(e.x + e.w / 2), cy = sy(e.y + e.h / 2); c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,.8)'; c.strokeText(lab, cx, cy); c.fillStyle = T >= 900 ? '#ffd24a' : '#fff'; c.fillText(lab, cx, cy); }
+    }
+    // призрак: порты и разрывы до постановки
+    if (v.cursor && PROTOS[v.cursor] && isHeatType(PROTOS[v.cursor].type) && v.ghostPos) for (const p of heatPorts({ proto: v.cursor, t: PROTOS[v.cursor].type, x: v.ghostPos[0], y: v.ghostPos[1], dir: v.rot as any })) portRing(p, true);
+    c.restore();
+  }
+  /** v1.16: диагностика рендера для F3 — какой режим выбран и почему (наличие видеокарты режим не доказывает) */
+  gameGL(): WebGL2RenderingContext | null { return this.batch?.kind === 'webgl' ? (this.batch as GLBatch).gl : null; }
+  gpuNote(): string {
+    const gl = this.gameGL(); let name = '', known = false, software = false;
+    if (gl) { try { if (!gl.isContextLost()) { const ext = gl.getExtension('WEBGL_debug_renderer_info'); const raw = String(ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)); known = !!ext && !!raw && raw !== 'null' && raw !== 'undefined' && !/^(webgl|generic|unknown|default|mozilla|webkit)(\s|$)/i.test(raw.trim()); if (known) name = raw; software = GLBatch.isSoftware(gl); } } catch { /* контекст потерян или имя недоступно */ } }
+    const why = this.modeNote === 'soft' ? 'WebGL есть, но программный (SwiftShader/llvmpipe) — выбран Canvas' : this.modeNote === 'nogl' ? 'WebGL2 недоступен — выбран Canvas' : this.modeNote === 'lost' ? 'контекст WebGL потерян; Canvas2D работает до восстановления' : this.modeNote === 'restore-failed' ? 'WebGL восстановить не удалось; используется Canvas2D' : '';
+    return gl ? software ? ` (${known ? name.slice(0, 60) + ', ' : ''}программный)` : known ? ` (${name.slice(0, 60)}, аппаратный)` : ' (GPU не определён)' : this.mode === 'canvas' ? ` (Canvas2D; WebGL не активен${why ? `; ${why}` : ''})` : why ? ` (${why})` : '';
+  }
   screenToWorld(px: number, py: number): [number, number] { return [(px - this.W / 2) / this.s + this.camX, (py - this.H / 2) / this.s + this.camY]; }
   /** кеш чанка для мелкого масштаба (16 px/клетку): та же поверхность, что и вблизи, плюс запечённые руда и декор */
   private chunkCanvas(w: World, c: Chunk): HTMLCanvasElement {
     const k = ckey(c.cx, c.cy); let e = this.cache.get(k);
-    if (e && e.ver === c.version) { e.used = this.frame; return e.cv; }
+    const terrainKey = terrainCacheKey(w, c);
+    if (e && e.ver === c.version && e.terrainKey === terrainKey) { e.used = this.frame; return e.cv; }
     const cv = e?.cv || document.createElement('canvas'); cv.width = cv.height = CHUNK * TS;
     const x = cv.getContext('2d')!;
     x.save(); x.scale(TS, TS); drawGeo(x, this.geoFor(w, c), c, TS, 0, false); x.restore();
@@ -141,7 +303,7 @@ export class Renderer {
       const i = ly * CHUNK + lx; if (c.decor[i] !== D_TREE) continue;
       this.drawTree(x, c.cx * CHUNK + lx, c.cy * CHUNK + ly, lx * TS, ly * TS, TS, true);
     }
-    this.cache.set(k, { cv, ver: c.version, used: this.frame });
+    this.cache.set(k, { cv, ver: c.version, terrainKey, used: this.frame });
     if (this.cache.size > 90) { let oldK = -1, oldU = Infinity; for (const [kk, v] of this.cache) if (v.used < oldU) { oldU = v.used; oldK = kk; } this.cache.delete(oldK); }
     return cv;
   }
@@ -162,6 +324,7 @@ export class Renderer {
   beltItemPos(e: Entity, s: number, L: number, pos: number): [number, number] { return beltItemPos(e, s, L, pos); }
   draw(g: Game, v: View, px: number, py: number) {
     this.stat.badges = 0; this.stat.floors = 0; this.stat.cwires = 0; this.stat.conds = 0;
+    this.bioBadges = [];
     const cv = this.canvas, dpr = this.pixelRatio();
     const W = Math.floor(cv.clientWidth * dpr), H = Math.floor(cv.clientHeight * dpr);
     if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
@@ -203,6 +366,12 @@ export class Renderer {
     // v1.4: покрытия — поверх земли и руды, под постройками
     if (lod) c.imageSmoothingEnabled = true;
     if (g.floors.size && !(this.skip & 1) && !lod) this.drawFloors(g, c, x0, y0, x1, y1, sx, sy, s);
+    // v1.14: слизь Роя — по чанкам, картинка 32×32 кешируется по версии слизи и сглаживается при растяжении
+    if (!lod && g.creepSet.size) for (let cy = Math.floor(y0 / CHUNK); cy <= Math.floor(y1 / CHUNK); cy++) for (let cx = Math.floor(x0 / CHUNK); cx <= Math.floor(x1 / CHUNK); cx++) {
+      const ch = g.world.chunks.get(ckey(cx, cy)); if (!this.hasCreep(ch)) continue;
+      const cv = this.creepCanvas(g.world, ch); const was = c.imageSmoothingEnabled, alpha = c.globalAlpha; c.imageSmoothingEnabled = true;
+      c.globalAlpha = 1; c.drawImage(cv, sx(cx * CHUNK), sy(cy * CHUNK), CHUNK * s, CHUNK * s); c.globalAlpha = alpha; c.imageSmoothingEnabled = was;
+    }
     // v1.7: рельсы — под постройками: сначала все шпалы, потом нитки (стрелки и пересечения выглядят цельно)
     if (g.railCells.size) {
       const rs: Entity[] = []; for (const e of g.ents.values()) if (e.t === 'rail' && e.x + e.w >= x0 && e.x <= x1 && e.y + e.h >= y0 && e.y <= y1) rs.push(e);
@@ -213,6 +382,15 @@ export class Renderer {
     if (v.pollution) for (let cy = Math.floor(y0 / CHUNK); cy <= Math.floor(y1 / CHUNK); cy++) for (let cx = Math.floor(x0 / CHUNK); cx <= Math.floor(x1 / CHUNK); cx++) {
       if (!g.world.hasChunk(cx, cy)) continue; const p = g.world.getChunk(cx, cy).pollution; if (p < 0.05) continue;
       c.fillStyle = `rgba(150,40,20,${Math.min(0.5, Math.log10(1 + p) * 0.16)})`; c.fillRect(sx(cx * CHUNK), sy(cy * CHUNK), CHUNK * s + 1, CHUNK * s + 1);
+    }
+    // v1.16: заражение после аварии реактора — граница, затухающая заливка и время до исчезновения (всегда видно, независимо от слоя загрязнения)
+    if (g.nuc.zones.length) for (const z of g.nuc.zones) {
+      if (z.x + z.r < x0 || z.x - z.r > x1 || z.y + z.r < y0 || z.y - z.r > y1) continue;
+      const left = z.dur - (g.tick - z.t); if (left <= 0) continue; const k = left / z.dur, px = sx(z.x), py = sy(z.y), R = z.r * s;
+      const gr = c.createRadialGradient(px, py, 0, px, py, R); gr.addColorStop(0, `rgba(190,230,40,${0.38 * k + 0.06})`); gr.addColorStop(1, 'rgba(190,230,40,0.02)');
+      c.fillStyle = gr; c.beginPath(); c.arc(px, py, R, 0, Math.PI * 2); c.fill();
+      c.save(); c.setLineDash([s * 0.6, s * 0.4]); c.lineDashOffset = -(g.tick * 0.05) * s; c.strokeStyle = `rgba(230,240,60,${0.5 + 0.3 * Math.sin(g.tick / 20)})`; c.lineWidth = Math.max(1.5, s * 0.12); c.beginPath(); c.arc(px, py, R, 0, Math.PI * 2); c.stroke(); c.restore();
+      if (s >= 6) { const sec = Math.ceil(left / 60); c.fillStyle = '#f2f6a0'; c.font = `bold ${Math.max(10, Math.min(20, s * 0.9))}px sans-serif`; c.textAlign = 'center'; c.fillText(`☢ ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`, px, py - R - 4); c.textAlign = 'left'; }
     }
     if (v.zoom < 0.3) { c.fillStyle = 'rgba(0,0,0,0)'; }
     const t = g.tick;
@@ -247,22 +425,25 @@ export class Renderer {
       }
     }
     // 6. постройки, деревья, юниты Роя и персонаж — сортировка по Y
-    type Obj = { y: number; k: 0 | 1 | 2; e?: Entity; tx?: number; ty?: number; u?: Unit };
+    type Obj = { y: number; k: 0 | 1 | 2 | 3; e?: Entity; tx?: number; ty?: number; u?: Unit; bio?: BioRenderGroup };
     const objs: Obj[] = [];
     for (const e of tall) objs.push({ y: e.y + e.h, k: 0, e });
     for (const [tx, ty] of trees) objs.push({ y: ty + .8, k: 1, tx, ty });
     if (!mapMode) for (const u of g.units) if (u.x > x0 && u.x < x1 && u.y > y0 && u.y < y1) objs.push({ y: u.y + .2, k: 2, u });
+    for (const bio of bioCorpseRenderGroups(g, x0 - 1, y0 - 1, x1 + 1, y1 + 1)) if (g.world.hasChunk(Math.floor(bio.x / CHUNK), Math.floor(bio.y / CHUNK))) objs.push({ y: bio.y + .15, k: 3, bio });
     objs.sort((a, b) => a.y - b.y);
     let playerDrawn = false;
     const drawPlayer = () => { playerDrawn = true; if (!g.player.dead && g.player.veh == null) this.drawPlayer(g, sx(px), sy(py), s); };
     for (const o of objs) {
       if (!playerDrawn && o.y > py + 0.3) drawPlayer();
       if (o.k === 1) { this.drawTree(c, o.tx!, o.ty!, sx(o.tx!), sy(o.ty!), s, false); continue; }
-      if (o.k === 2) { this.drawUnit(c, o.u!, sx(o.u!.x), sy(o.u!.y), s, t); continue; }
+      if (o.k === 2) { this.drawUnit(c, o.u!, sx(o.u!.x), sy(o.u!.y), s, t, undefined, Math.min(3, g.mut)); continue; }
+      if (o.k === 3) { const b = o.bio!; paintBioRemains(c, sx(b.x), sy(b.y), s, b.kind, b.count, mapMode); bioBadge(c, sx(b.x), sy(b.y) - s * .25, s, b.count); continue; }
       const e = o.e!;
       if (mapMode) { c.fillStyle = PROTOS[e.proto].color; c.fillRect(sx(e.x), sy(e.y), e.w * s, e.h * s); continue; }
-      const st: any = { t, seed: e.id, working: e.status === 'working' || e.status === 'low-power', recipeColor: e.recipe && RECIPES[e.recipe] ? ITEMS[RECIPES[e.recipe].out[0][0]]?.color : undefined };
-      if (e.t === 'turret') { st.aim = e.aim; st.flash = (e.fireCd || 0) >= 4; }
+      const st: any = { t, seed: e.id, working: e.status === 'working' || e.status === 'low-power', recipeColor: ITEMS[recipeArtItem(e.recipe) || '']?.color };
+      if (e.t === 'turret' || (e.t === 'nest' && PROTOS[e.proto].enemy?.worm)) { st.aim = e.aim; st.flash = (e.fireCd || 0) >= 4; }
+      if (e.t === 'gate') st.open = !!e.open;
       if (e.t === 'lamp') { st.lit = e.active; st.lampColor = e.ccol; }
       if (e.modules) st.mods = e.modules;
       if (e.t === 'beacon') st.working = !!e._on;
@@ -270,15 +451,17 @@ export class Renderer {
       if (e.t === 'silo') { st.parts = e.parts || 0; st.launch = e.launchT ? 1 - e.launchT / 900 : 0; st.working = e.status === 'working' || e.status === 'launching'; }
       if (e.t === 'radar') st.working = e.status === 'working';
       if (e.t === 'tpump') (st as any).drain = e.pm === 1;
+      if (e.t === 'reactor' || e.t === 'hexch' || e.t === 'hpipe') this.nucArt(g, e, st);
       if (e.t === 'tank' && e._fn) { const n = g.fluidNets[e._fn[0]]; if (n) { st.fill = n.cap ? Math.min(1, n.amount / n.cap) : 0; st.fluidColor = n.fluid ? ITEMS[n.fluid]?.color : undefined; } }
-      drawEntityArt(c, e.proto, sx(e.x), sy(e.y), s, e.dir, st);
+      if (e.t === 'car' && e.vehicleState) { st.angle = e.vehicleState.angle; st.mounts = e.vehicleState.mounts.filter(Boolean).map(m => ({ proto: m!.proto, aim: m!.aim, fireCd: m!.fireCd })); drawEntityArt(c, e.proto, sx(e.vehicleState.x - PROTOS.car.w / 2), sy(e.vehicleState.y - PROTOS.car.h / 2), s, 0, st); }
+      else { if (e.t === 'wall') st.conn = wallConnMask(g, e.proto, e.x, e.y); drawEntityArt(c, e.proto, sx(e.x), sy(e.y), s, e.dir, st); }
       if (e.t === 'inserter') this.drawArm(g, e, sx, sy, s);
     }
     if (!playerDrawn) drawPlayer();
     }
     if (this.skip & 2) { this.ctx = this.mainCtx; return; }
     // верхний слой: при WebGL — отдельный прозрачный холст поверх
-    if (batch && batch.kind === 'webgl') { c = this.topCtx!; this.ctx = c; c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, W, H); }
+    if (batch && batch.kind === 'webgl') { c = this.topCtx!; this.ctx = c; c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, W, H); for (const bio of this.bioBadges) bioBadge(c, sx(bio.x), sy(bio.y) - s * .25, s, bio.count); }
     // v1.8: блоки путей — когда в руке светофор или курсор на светофоре: рельсы цветом блока, у развилок — подсказка
     const curP = v.cursor ? ITEMS[v.cursor]?.place : undefined;
     const showBlk = !mapMode && (curP === 'rail-signal' || curP === 'rail-chain-signal' || v.hoverEnt?.t === 'signal');
@@ -313,12 +496,15 @@ export class Renderer {
     const curPlace = v.cursor ? ITEMS[v.cursor]?.place : undefined;
     const hovGhost = v.mouseIn && !v.cursor ? (() => { const [wx, wy] = this.screenToWorld(v.mouseX * dpr, v.mouseY * dpr); return g.ghostAt(Math.floor(wx), Math.floor(wy)); })() : null;
     if (v.zones || v.alt || hovGhost || v.hoverEnt?.t === 'roboport' || curPlace === 'roboport') this.drawZones(g, c, sx, sy, s, curPlace === 'roboport' && v.ghostPos ? v.ghostPos : null);
+    // v1.16: слой радиусов турелей и радиус ставимой турели (не часть симуляции).
+    this.drawTurretRanges(g, c, v, sx, sy, s, x0, y0, x1, y1, mapMode);
+    this.drawBioRange(g, c, v, sx, sy, s, mapMode);
     // призраки (чертежи) и метки сноса/улучшения
     if (!mapMode) {
       for (const gh of g.ghosts.values()) {
         if (gh.x + gh.w < x0 || gh.x > x1 || gh.y + gh.h < y0 || gh.y > y1) continue;
         if (_P[gh.proto]?.type === 'rail') { const sh = shapeOf(gh.proto, gh.dir); drawRail(c, gh.proto, gh.dir, sx(gh.x + sh.ox), sy(gh.y + sh.oy), s, { ghost: true }); continue; }
-        c.globalAlpha = .42; drawEntityArt(c, gh.proto, sx(gh.x), sy(gh.y), s, gh.dir, { t: 0, ug: 'in', ghost: true }); c.globalAlpha = 1;
+        c.globalAlpha = .42; drawEntityArt(c, gh.proto, sx(gh.x), sy(gh.y), s, gh.dir, { t: 0, ug: 'in', ghost: true, conn: wallConnMask(g, gh.proto, gh.x, gh.y, undefined, true) }); c.globalAlpha = 1;
         c.fillStyle = gh.rb ? 'rgba(255,170,60,.2)' : 'rgba(90,170,255,.2)'; c.fillRect(sx(gh.x), sy(gh.y), gh.w * s, gh.h * s);
         c.strokeStyle = gh.rb ? 'rgba(255,190,90,.85)' : 'rgba(120,190,255,.8)'; c.lineWidth = 1; c.setLineDash([4, 3]); c.strokeRect(sx(gh.x) + .5, sy(gh.y) + .5, gh.w * s - 1, gh.h * s - 1); c.setLineDash([]);
         if (gh.st && s >= 14) this.ghostIcon(c, gh.st, gh.proto, sx(gh.x + gh.w) - Math.min(gh.w, 1) * s * .32, sy(gh.y) + Math.min(gh.h, 1) * s * .32, s * Math.min(1, .5 + .15 * Math.max(gh.w, gh.h)), t);
@@ -342,6 +528,7 @@ export class Renderer {
     if (!mapMode) this.drawFx(g, c, sx, sy, s);
     // v1.2: строительные роботы — поверх построек, с тенью и грузом
     this.drawRobots(g, c, sx, sy, s, x0, y0, x1, y1, t, mapMode);
+    this.drawV117Actors(g, c, v, sx, sy, s, x0, y0, x1, y1, t, mapMode, dpr);
     // дым из труб: печи на топливе, бойлеры, твердотопливные буры; ракета — клубы при старте
     if (!mapMode && v.smoke !== false) for (const e of tall) {
       if (e.status !== 'working' && e.status !== 'launching') continue;
@@ -387,10 +574,10 @@ export class Renderer {
     if (v.wireFrom != null && v.cursor && (v.cursor === 'red-wire' || v.cursor === 'green-wire') && v.mouseIn) {
       const A = g.ents.get(v.wireFrom);
       if (A) {
-        const [wx, wy] = this.screenToWorld(v.mouseX * dpr, v.mouseY * dpr); const far = Math.hypot(wx - (A.x + A.w / 2), wy - (A.y + A.h / 2)) > 9.5;
+        const [wx, wy] = this.screenToWorld(v.mouseX * dpr, v.mouseY * dpr); const far = Math.hypot(wx - (A.x + A.w / 2), wy - (A.y + A.h / 2)) > WIRE_REACH + .5;
         c.strokeStyle = far ? 'rgba(255,255,255,.5)' : v.cursor === 'green-wire' ? '#3fd04f' : '#e8433a'; c.lineWidth = Math.max(1.5, s * .05); c.setLineDash([s * .2, s * .12]);
         const [tpx, tpy] = termPos(A, v.wireFromT || 0); c.beginPath(); c.moveTo(sx(tpx), sy(tpy - .15)); c.lineTo(v.mouseX * dpr, v.mouseY * dpr); c.stroke(); c.setLineDash([]);
-        c.strokeStyle = 'rgba(255,255,255,.18)'; c.lineWidth = 1; c.beginPath(); c.arc(sx(A.x + A.w / 2), sy(A.y + A.h / 2), 9 * s, 0, 7); c.stroke();
+        c.strokeStyle = 'rgba(255,255,255,.18)'; c.lineWidth = 1; c.beginPath(); c.arc(sx(A.x + A.w / 2), sy(A.y + A.h / 2), WIRE_REACH * s, 0, 7); c.stroke();
       }
     }
     // v1.5 (Alt): условие включения — значок сигнала A, знак и число или значок B
@@ -410,7 +597,7 @@ export class Renderer {
       const bad = e.status && !['working', 'idle', 'waiting', 'no-target'].includes(e.status) && e.t !== 'pole' && e.t !== 'chest';
       const ex = sx(e.x + e.w / 2), ey = sy(e.y + e.h / 2);
       if (v.alt) {
-        if ((e.t === 'assembler' || e.t === 'furnace') && e.recipe) { c.fillStyle = 'rgba(0,0,0,.55)'; c.beginPath(); c.arc(ex, ey, s * .42, 0, 7); c.fill(); c.drawImage(itemIcon(RECIPES[e.recipe].out[0][0]), ex - s * .35, ey - s * .35, s * .7, s * .7); }
+        if ((e.t === 'assembler' || e.t === 'furnace') && e.recipe) { const ri = recipeArtItem(e.recipe); if (ri) { c.fillStyle = 'rgba(0,0,0,.55)'; c.beginPath(); c.arc(ex, ey, s * .42, 0, 7); c.fill(); c.drawImage(itemIcon(ri), ex - s * .35, ey - s * .35, s * .7, s * .7); } }
         if (e.t === 'chest' && e.inv) { const f = e.req?.find(q => q)?.item || e.lfilter || e.inv.firstItem(); if (f) c.drawImage(itemIcon(f), ex - s * .3, ey - s * .3, s * .6, s * .6); }
         if (e.t === 'inserter') { c.save(); c.translate(ex, ey); c.rotate(e.dir * Math.PI / 2); c.fillStyle = '#ffd34d'; c.beginPath(); c.moveTo(0, -s * .45); c.lineTo(s * .15, -s * .25); c.lineTo(-s * .15, -s * .25); c.fill(); c.restore(); }
         if (e.modules && e.modules.some(m => m)) { const n = e.modules.length, sz = Math.min(s * .36, e.w * s * .9 / n); for (let i = 0; i < n; i++) { const m = e.modules[i]; const mx0 = ex - n * sz / 2 + i * sz, my0 = sy(e.y + e.h) - sz - 2; c.fillStyle = 'rgba(0,0,0,.6)'; c.fillRect(mx0, my0, sz - 1, sz - 1); if (m) c.drawImage(itemIcon(m), mx0 + 1, my0 + 1, sz - 3, sz - 3); } }
@@ -425,13 +612,15 @@ export class Renderer {
         }
         if (e.t === 'drill') { const o = g.drillOut(e); c.strokeStyle = '#ffd34d'; c.lineWidth = 2; c.strokeRect(sx(o.x) + 2, sy(o.y) + 2, s - 4, s - 4); }
       }
-      if (bad && (t >> 5) % 2 === 0 || bad && e.status === 'no-power') this.statusIcon(e.status!, ex, ey - (v.alt ? s * .5 : 0), s);
-      else if (e.lst && (t >> 5) % 2 === 0) this.statusIcon(e.lst === 'noitem' ? 'no-input' : 'no-robots', ex, ey - (v.alt ? s * .5 : 0), s); // v1.3: сундук запроса ждёт
+      // v1.16: обычные значки — только в Alt-режиме (критические видны всегда); новый статус держится ≈1 с до показа, показанный не меняется чаще раза в секунду
+      const want = bad ? e.status! : e.lst ? (e.lst === 'noitem' ? 'no-input' : 'no-robots') : null;
+      const shown = this.stableStatus(g, e.id, want && (v.alt || CRIT_STATUS.has(want)) ? want : null);
+      if (shown) this.statusIcon(shown, ex, ey - (v.alt ? s * .5 : 0), s);
     }
     // полосы прочности
     if (!mapMode) {
       for (const e of tall) { const max = PROTOS[e.proto].hp; if (e.hp != null && e.hp < max) this.hpBar(c, sx(e.x + e.w / 2), sy(e.y) - s * .1, e.w * s * .8, e.hp / max, e.t === 'nest'); }
-      for (const u of g.units) { const max = UNITS[u.k].hp; if (u.hp < max && u.x > x0 && u.x < x1 && u.y > y0 && u.y < y1) this.hpBar(c, sx(u.x), sy(u.y) - UNITS[u.k].size * s * .7, UNITS[u.k].size * s, u.hp / max, true); }
+      for (const u of g.units) { const max = unitMax(u); if (u.hp < max && u.x > x0 && u.x < x1 && u.y > y0 && u.y < y1) this.hpBar(c, sx(u.x), sy(u.y) - UNITS[u.k].size * s * .7, UNITS[u.k].size * s, u.hp / max, true); }
     }
     // зона подсветки наведения
     if (v.hoverEnt && !v.cursor) { const e = v.hoverEnt; c.strokeStyle = 'rgba(255,220,100,.9)'; c.lineWidth = 2; c.strokeRect(sx(e.x) + 1, sy(e.y) + 1, e.w * s - 2, e.h * s - 2);
@@ -453,13 +642,64 @@ export class Renderer {
       c.strokeStyle = '#4be36b'; c.lineWidth = 2; c.strokeRect(sx(bx), sy(by), n * s, n * s);
       if (s >= 12) { c.fillStyle = 'rgba(0,0,0,.6)'; c.fillRect(sx(bx), sy(by) - 16, 46, 15); c.fillStyle = '#e8f0d8'; c.font = '11px sans-serif'; c.textAlign = 'left'; c.textBaseline = 'middle'; c.fillText(`${n}×${n}`, sx(bx) + 4, sy(by) - 8); }
     }
+    // v1.16: Alt-режим тепла — соединения, градиент температуры, числа; порты призрака до постановки
+    if (!mapMode && (v.alt || (v.cursor && PROTOS[v.cursor] && isHeatType(PROTOS[v.cursor].type)))) this.drawHeatAlt(g, c, sx, sy, s, x0, y0, x1, y1, v);
+    // v1.16: радиус ядерного взрыва вокруг курсора (предупреждение перед выстрелом)
+    if (v.mouseIn && !v.cursor && !mapMode) {
+      const kk = g.player.kit; const gi = kk ? (kk.guns[kk.sel] ? kk.sel : kk.guns.findIndex(Boolean)) : -1;
+      const ai = gi >= 0 && kk ? ((kk.rnd[gi] > 0 ? kk.rt[gi] : null) || kk.ammo[gi]?.item || null) : null;
+      const nk = ai ? ITEMS[ai]?.am : null;
+      if (nk?.nuke && nk.aoe) {
+        const [wx, wy] = this.screenToWorld(v.mouseX * dpr, v.mouseY * dpr);
+        c.save(); c.lineWidth = 2; c.strokeStyle = 'rgba(160,255,80,.85)'; c.fillStyle = 'rgba(160,255,80,.08)'; c.setLineDash([8, 6]);
+        c.beginPath(); c.arc(sx(wx), sy(wy), nk.aoe * s, 0, Math.PI * 2); c.fill(); c.stroke();
+        c.strokeStyle = 'rgba(255,200,60,.85)'; c.beginPath(); c.arc(sx(wx), sy(wy), nk.nuke.tr * s, 0, Math.PI * 2); c.stroke(); c.restore();
+      }
+    }
     // v1.7: план пути (рельсы в руке) и вагон на рельсах
     if (v.railPlan && v.mouseIn) {
       const rp = v.railPlan;
-      for (const pc of rp.pieces) { const sh = shapeOf(pc.proto, pc.dir); c.globalAlpha = pc.have ? .35 : .9; drawRail(c, pc.proto, pc.dir, sx(pc.x + sh.ox), sy(pc.y + sh.oy), s, { ghost: true, map: mapMode }); c.globalAlpha = 1; }
-      const [ex, ey] = rp.end; c.strokeStyle = rp.ok ? '#4be36b' : '#f04848'; c.lineWidth = 2; c.beginPath(); c.arc(sx(ex), sy(ey), Math.max(4, s * .5), 0, 7); c.stroke();
-      if (rp.start) { c.fillStyle = '#ffd34d'; c.beginPath(); c.arc(sx(rp.start[0]), sy(rp.start[1]), Math.max(3, s * .3), 0, 7); c.fill(); }
-      const label = rp.label; if (label) { c.font = `${Math.round(12 * dpr)}px system-ui,sans-serif`; c.textAlign = 'left'; c.textBaseline = 'middle'; const tw = c.measureText(label).width; c.fillStyle = 'rgba(0,0,0,.7)'; c.fillRect(sx(ex) + 12, sy(ey) - 10, tw + 10, 20); c.fillStyle = rp.ok ? '#e8f0d8' : '#ff9a8a'; c.fillText(label, sx(ex) + 17, sy(ey)); }
+      for (const pc of rp.pieces) {
+        const sh = shapeOf(pc.proto, pc.dir); c.globalAlpha = pc.have ? .35 : pc.ghost ? .52 : .9;
+        drawRail(c, pc.proto, pc.dir, sx(pc.x + sh.ox), sy(pc.y + sh.oy), s, { ghost: true, map: mapMode }); c.globalAlpha = 1;
+        if (pc.valid === false) { c.save(); c.translate(sx(pc.x + sh.ox), sy(pc.y + sh.oy)); c.scale(s, s); c.strokeStyle = '#f04848'; c.lineWidth = Math.max(.12, 2 / s); c.stroke(railPaths(pc.proto, pc.dir).axis); c.restore(); }
+      }
+      const lanes = rp.lanes?.length ? rp.lanes : rp.start ? [{ sx: rp.start[0], sy: rp.start[1], ex: rp.end[0], ey: rp.end[1] }] : [];
+      for (const lane of lanes) {
+        c.strokeStyle = rp.ok ? '#4be36b' : '#f04848'; c.lineWidth = 2; c.beginPath(); c.arc(sx(lane.ex), sy(lane.ey), Math.max(4, s * .5), 0, 7); c.stroke();
+        c.fillStyle = '#ffd34d'; c.beginPath(); c.arc(sx(lane.sx), sy(lane.sy), Math.max(3, s * .3), 0, 7); c.fill();
+      }
+      const [ex, ey] = rp.end; const label = rp.label;
+      if (label) { c.font = `${Math.round(12 * dpr)}px system-ui,sans-serif`; c.textAlign = 'left'; c.textBaseline = 'middle'; const tw = c.measureText(label).width, hint = rp.hint || '', hw = hint ? c.measureText(hint).width : 0; const x = sx(ex) + 12, y = sy(ey) - (hint ? 20 : 10); c.fillStyle = 'rgba(0,0,0,.76)'; c.fillRect(x, y - 10, Math.max(tw, hw) + 10, hint ? 40 : 20); c.fillStyle = rp.ok ? '#e8f0d8' : '#ff9a8a'; c.fillText(label, x + 5, y); if (hint) { c.font = `${Math.round(10 * dpr)}px system-ui,sans-serif`; c.fillStyle = '#cad2d9'; c.fillText(hint, x + 5, y + 15); } }
+    } else if (v.polePlan && v.mouseIn && !mapMode) {
+      const plan = v.polePlan, a = plan.anchor, q = plan.next;
+      const zone = (node: { proto: string; x: number; y: number; w: number; h: number }, color: string) => {
+        const r = PROTOS[node.proto]?.supply || 0; c.fillStyle = color;
+        c.fillRect(sx(node.x - r), sy(node.y - r), (node.w + 2 * r) * s, (node.h + 2 * r) * s);
+      };
+      if (a) { zone(a, 'rgba(80,200,255,.12)'); c.strokeStyle = '#78cde6'; c.lineWidth = 2 * dpr; c.strokeRect(sx(a.x), sy(a.y), a.w * s, a.h * s); }
+      if (q) {
+        zone(q, 'rgba(80,200,255,.09)');
+        c.globalAlpha = .6; drawEntityArt(c, q.proto, sx(q.x), sy(q.y), s, q.dir, { t: 0 }); c.globalAlpha = 1;
+        c.strokeStyle = !q.ok ? '#f04848' : q.shortened ? '#e6c348' : q.ghost ? '#bca7ff' : '#4be36b'; c.lineWidth = 2 * dpr;
+        c.strokeRect(sx(q.x), sy(q.y), q.w * s, q.h * s);
+        if (a) { c.save(); c.setLineDash([5 * dpr, 4 * dpr]); c.strokeStyle = q.ghost ? '#bca7ff' : '#ffd094'; c.beginPath(); c.moveTo(sx(a.x + a.w / 2), sy(a.y + a.h / 2)); c.lineTo(sx(q.x + q.w / 2), sy(q.y + q.h / 2)); c.stroke(); c.restore(); }
+      }
+      c.font = `${Math.round(12 * dpr)}px system-ui,sans-serif`; c.textAlign = 'left'; c.textBaseline = 'middle';
+      const tw = c.measureText(plan.label).width, x = Math.max(4 * dpr, Math.min(c.canvas.width - tw - 16 * dpr, v.mouseX * dpr + 14 * dpr)), y = Math.max(16 * dpr, v.mouseY * dpr - 12 * dpr);
+      c.fillStyle = 'rgba(0,0,0,.78)'; c.fillRect(x, y - 10 * dpr, tw + 12 * dpr, 20 * dpr); c.fillStyle = q && !q.ok ? '#ff9a8a' : '#e8f0d8'; c.fillText(plan.label, x + 6 * dpr, y);
+    } else if (v.wallPlan && v.mouseIn && !mapMode) {
+      const wp = v.wallPlan;
+      const plannedWalls = new Set(wp.positions.map(q => `${q.x}:${q.y}`));
+      if (!wp.overflow) for (const q of wp.positions) {
+        const col = q.ok === null ? '#e6c348' : q.ok ? '#4be36b' : '#f04848';
+        c.globalAlpha = .55; drawEntityArt(c, wp.proto, sx(q.x), sy(q.y), s, 0, { t: 0, ug: 'in', conn: wallConnMask(g, wp.proto, q.x, q.y, plannedWalls, true) }); c.globalAlpha = 1;
+        c.fillStyle = q.ok === null ? 'rgba(230,195,72,.14)' : q.ok ? 'rgba(60,220,90,.24)' : 'rgba(240,60,60,.3)'; c.fillRect(sx(q.x), sy(q.y), s, s);
+        c.strokeStyle = col; c.lineWidth = 1.5; c.strokeRect(sx(q.x), sy(q.y), s, s);
+      }
+      const label = wp.label; c.font = `${Math.round(12 * dpr)}px system-ui,sans-serif`; c.textAlign = 'left'; c.textBaseline = 'middle';
+      const tw = c.measureText(label).width, x = Math.max(4 * dpr, Math.min(c.canvas.width - tw - 16 * dpr, v.mouseX * dpr + 14 * dpr)), y = Math.max(16 * dpr, v.mouseY * dpr - 12 * dpr);
+      c.fillStyle = 'rgba(0,0,0,.78)'; c.fillRect(x, y - 10 * dpr, tw + 12 * dpr, 20 * dpr); c.fillStyle = wp.overflow ? '#ff9a8a' : '#e8f0d8'; c.fillText(label, x + 6 * dpr, y);
     } else if (v.carGhost && v.mouseIn && !mapMode) {
       const q = v.carGhost; c.globalAlpha = .6; drawCar(c, q.proto, sx(q.x), sy(q.y), q.dx, q.dy, s, { ghost: true }); c.globalAlpha = 1;
       if (!q.ok && q.reason) { c.font = `${Math.round(13 * dpr)}px system-ui,sans-serif`; c.textAlign = 'center'; c.fillStyle = 'rgba(0,0,0,.7)'; const rs = tr(q.reason); const tw = c.measureText(rs).width; c.fillRect(sx(q.x) - tw / 2 - 6, sy(q.y) - s * 2 - 22, tw + 12, 20); c.fillStyle = '#ff9a8a'; c.fillText(rs, sx(q.x), sy(q.y) - s * 2 - 8); }
@@ -472,7 +712,7 @@ export class Renderer {
           c.strokeStyle = 'rgba(255,200,120,.6)'; c.lineWidth = 1.5; for (const e of g.ents.values()) if (e.t === 'pole' && Math.hypot(e.x + e.w / 2 - gx - w / 2, e.y + e.h / 2 - gy - h / 2) <= Math.min(p.wire!, PROTOS[e.proto].wire!)) { c.beginPath(); c.moveTo(sx(gx + w / 2), sy(gy + .2)); c.lineTo(sx(e.x + e.w / 2), sy(e.y + .2)); c.stroke(); } }
         if (p.type === 'beacon') { const r = p.beaconRange!; c.fillStyle = 'rgba(200,120,255,.13)'; c.fillRect(sx(gx - r), sy(gy - r), (2 * r + w) * s, (2 * r + h) * s); }
         if (p.type === 'underground') { c.fillStyle = 'rgba(255,220,100,.12)'; for (let i = 1; i <= p.reach!; i++) c.fillRect(sx(gx + DX[v.rot] * i), sy(gy + DY[v.rot] * i), s, s); }
-        c.globalAlpha = .6; drawEntityArt(c, pid, sx(gx), sy(gy), s, v.rot, { t: 0, ug: 'in' }); c.globalAlpha = 1;
+        c.globalAlpha = .6; drawEntityArt(c, pid, sx(gx), sy(gy), s, v.rot, { t: 0, ug: 'in', conn: wallConnMask(g, pid, gx, gy, undefined, true) }); c.globalAlpha = 1;
         const ok = v.ghostOk?.ok;
         c.fillStyle = ok ? 'rgba(60,220,90,.25)' : 'rgba(240,60,60,.3)'; c.fillRect(sx(gx), sy(gy), w * s, h * s);
         c.strokeStyle = ok ? '#4be36b' : '#f04848'; c.lineWidth = 2; c.strokeRect(sx(gx), sy(gy), w * s, h * s);
@@ -485,13 +725,14 @@ export class Renderer {
     // чертёж в руке
     if (v.bp && v.bpPos && v.mouseIn) {
       const [bx, by] = v.bpPos;
+      const plannedBlueprintWalls = new Set(v.bp.entities.filter(be => PROTOS[be.p]?.type === 'wall').map(be => `${bx + be.x}:${by + be.y}`));
       for (const be of v.bp.entities) {
         const [w, h] = bpEntDims(be); const x = bx + be.x, y = by + be.y;
         if (x + w < x0 || x > x1 || y + h < y0 || y > y1) continue;
         const ok = g.canPlace(be.p, x, y, be.d, false).ok || !!g.replaceTarget(be.p, x, y, be.d);
-        c.globalAlpha = .5; if (PROTOS[be.p].type === 'pipe' || PROTOS[be.p].type === 'belt' || !mapMode) drawEntityArt(c, be.p, sx(x), sy(y), s, be.d, { t: 0, ug: 'in' }); c.globalAlpha = 1;
+        c.globalAlpha = .5; if (PROTOS[be.p].type === 'pipe' || PROTOS[be.p].type === 'belt' || !mapMode) drawEntityArt(c, be.p, sx(x), sy(y), s, be.d, { t: 0, ug: 'in', conn: wallConnMask(g, be.p, x, y, plannedBlueprintWalls, true) }); c.globalAlpha = 1;
         c.fillStyle = ok ? 'rgba(80,170,255,.18)' : 'rgba(240,60,60,.35)'; c.fillRect(sx(x), sy(y), w * s, h * s);
-        if (be.recipe && s > 20) { c.drawImage(itemIcon(RECIPES[be.recipe]?.out[0][0] || be.p), sx(x + w / 2) - s * .3, sy(y + h / 2) - s * .3, s * .6, s * .6); }
+        if (be.recipe && s > 20) { const ri = recipeArtItem(be.recipe) || be.p; if (ri) c.drawImage(itemIcon(ri), sx(x + w / 2) - s * .3, sy(y + h / 2) - s * .3, s * .6, s * .6); }
       }
       c.strokeStyle = '#58b0ff'; c.lineWidth = 2; c.setLineDash([6, 4]); c.strokeRect(sx(bx), sy(by), v.bp.w * s, v.bp.h * s); c.setLineDash([]);
     }
@@ -502,6 +743,7 @@ export class Renderer {
       c.fillStyle = f; c.fillRect(sx(X0), sy(Y0), (X1 - X0) * s, (Y1 - Y0) * s); c.strokeStyle = st; c.lineWidth = 2; c.strokeRect(sx(X0), sy(Y0), (X1 - X0) * s, (Y1 - Y0) * s);
       c.font = `${Math.round(12 * dpr)}px system-ui`; c.fillStyle = st; c.textAlign = 'left'; c.fillText(`${X1 - X0}×${Y1 - Y0}`, sx(X1) + 4, sy(Y1) + 4);
     } else if (v.tool && v.mouseIn) { const [wx, wy] = this.screenToWorld(v.mouseX * dpr, v.mouseY * dpr); c.strokeStyle = TOOL_COL[v.tool][1]; c.lineWidth = 2; c.strokeRect(sx(Math.floor(wx)), sy(Math.floor(wy)), s, s); }
+    if (v.hl && v.hl.length) { const t = performance.now(); v.hl = v.hl.filter(h => h.until > t); const a = 0.55 + 0.35 * Math.sin(t / 150); c.strokeStyle = `rgba(255,216,74,${a})`; c.lineWidth = 3; for (const h of v.hl) c.strokeRect(sx(h.x) - 1, sy(h.y) - 1, h.w * s + 2, h.h * s + 2); }
     // 9. ночь
     const day = v.noNight ? 1 : g.daylight();
     if (day < 1) {
@@ -521,6 +763,7 @@ export class Renderer {
       for (const f of g.fx) if (f.k === 'boom') light(sx(f.x), sy(f.y), s * 5 * (f.s || 1), f.t / 40);
       c.drawImage(d, 0, 0);
     }
+    drawFluidPorts(g, c, v, sx, sy, s, v.mouseX * dpr, v.mouseY * dpr, dpr);
     this.ctx = this.mainCtx;
   }
   /** направления, в которые труба реально соединена с соседями, и заливка (цвет, радиус 0..1) */
@@ -590,15 +833,21 @@ export class Renderer {
       }
     }
     // 6. постройки, деревья, юниты Роя и персонаж — сортировка по Y
-    type Obj = { y: number; k: 0 | 1 | 2; e?: Entity; tx?: number; ty?: number; u?: Unit };
+    type Obj = { y: number; k: 0 | 1 | 2 | 3; e?: Entity; tx?: number; ty?: number; u?: Unit; bio?: BioRenderGroup };
     const objs: Obj[] = [];
     for (const e of tall) objs.push({ y: e.y + e.h, k: 0, e });
     for (const [tx, ty] of trees) objs.push({ y: ty + .8, k: 1, tx, ty });
     if (!mapMode) for (const u of g.units) if (u.x > x0 && u.x < x1 && u.y > y0 && u.y < y1) objs.push({ y: u.y + .2, k: 2, u });
+    for (const bio of bioCorpseRenderGroups(g, x0 - 1, y0 - 1, x1 + 1, y1 + 1)) if (g.world.hasChunk(Math.floor(bio.x / CHUNK), Math.floor(bio.y / CHUNK))) objs.push({ y: bio.y + .15, k: 3, bio });
+    this.bioBadges = objs.filter(o => o.k === 3).map(o => o.bio!);
     objs.sort((a, b2) => a.y - b2.y);
     let playerDrawn = false;
     const drawPlayer = () => { playerDrawn = true; if (g.player.dead || g.player.veh != null) return;
-      b.sprite(`player@${R}`, 'player', 1.3 * R, 1.4 * R, c => this.drawPlayer(g, .65 * R, .95 * R, R, c), sx(px) - .65 * s, sy(py) - .95 * s, 1.3 * s, 1.4 * s, 1, true); };
+      const col = g.mpv?.peers[g.mpv.mp?.me ?? 0]?.color || '#d2782e'; const pl = g.player;
+      const wq = pl.walking ? Math.floor(((g.tick * .4 / (Math.PI * 2)) % 1) * 4) / 4 : 0; const lk = this.heroLook(g, pl, col, wq);
+      if (lk.aim != null) lk.aim = Math.round(lk.aim / (Math.PI * 2) * 16) * Math.PI * 2 / 16;
+      const pk = `player|${col}|${lk.armor || ''}|${lk.gun || ''}|${lk.facing}|${wq}|${lk.aim == null ? '-' : Math.round(lk.aim / (Math.PI * 2) * 16)}`;
+      b.sprite(`${pk}@${R}`, 'player', 1.6 * R, 1.6 * R, c => this.drawPlayer(g, .8 * R, 1.05 * R, R, c, pl, col, lk), sx(px) - .8 * s, sy(py) - 1.05 * s, 1.6 * s, 1.6 * s, 1, true); };
     for (const o of objs) {
       if (!playerDrawn && o.y > py + 0.3) drawPlayer();
       if (o.k === 1) {
@@ -610,22 +859,32 @@ export class Renderer {
       if (o.k === 2) {
         const u = o.u!; const d = UNITS[u.k]; const L = d.size * s * 1.45, LR = d.size * R * 1.45;
         const aq = ((Math.round(u.ang / (Math.PI * 2) * 16) % 16) + 16) % 16; const ph = (t + u.id * 7) * (0.35 + d.speed); const pq = Math.floor(((ph / (Math.PI * 2)) % 1) * 8);
-        const base = `unit|${u.k}|${aq}`;
-        b.sprite(`${base}|${pq}@${R}`, base, 1.5 * LR, 1.5 * LR, c => this.drawUnit(c, { ...u, ang: aq * Math.PI * 2 / 16 } as Unit, .75 * LR, .75 * LR, R, 0, pq * Math.PI * 2 / 8), sx(u.x) - .75 * L, sy(u.y) - .75 * L, 1.5 * L, 1.5 * L);
+        const mq = Math.min(3, g.mut), K = UNITS[u.k].boss ? 2.2 : UNITS[u.k].fly ? 1.9 : 1.5; const base = `unit|${u.k}|${aq}|${u.el ? 1 : 0}|${mq}`;
+        b.sprite(`${base}|${pq}@${R}`, base, K * LR, K * LR, c => this.drawUnit(c, { ...u, ang: aq * Math.PI * 2 / 16 } as Unit, K / 2 * LR, K / 2 * LR, R, 0, pq * Math.PI * 2 / 8, mq), sx(u.x) - K / 2 * L, sy(u.y) - K / 2 * L, K * L, K * L);
+        continue;
+      }
+      if (o.k === 3) {
+        const bio = o.bio!, bw = 1.1 * R, bh = .8 * R;
+        const key = `bio|${bio.kind}|${R}|${mapMode ? 1 : 0}`;
+        b.sprite(key, key, bw, bh, c => paintBioRemains(c, bw / 2, bh / 2, R, bio.kind, bio.count, mapMode), sx(bio.x) - .55 * s, sy(bio.y) - .4 * s, 1.1 * s, .8 * s);
         continue;
       }
       const e = o.e!;
       if (mapMode) { b.rect(sx(e.x), sy(e.y), e.w * s, e.h * s, this.col(PROTOS[e.proto].color)); continue; }
       const working = e.status === 'working' || e.status === 'low-power';
-      const st: ArtState = { t: 0, seed: (e.id & 1) * 7 + 3, working, recipeColor: e.recipe && RECIPES[e.recipe] ? ITEMS[RECIPES[e.recipe].out[0][0]]?.color : undefined };
+      const st: ArtState = { t: 0, seed: (e.id & 1) * 7 + 3, working, recipeColor: ITEMS[recipeArtItem(e.recipe) || '']?.color };
       let key = `${working ? 1 : 0}|${st.recipeColor || ''}|${e.id & 1}`; let anim = working, force = false;
-      if (e.t === 'turret') { const q = Math.round((e.aim || 0) / (Math.PI * 2) * 32); st.aim = q * Math.PI * 2 / 32; st.flash = (e.fireCd || 0) >= 4; key += `|${q}|${st.flash ? 1 : 0}`; }
+      if (e.t === 'wall') { st.conn = wallConnMask(g, e.proto, e.x, e.y); key += wallConnAtlasKey(st.conn); }
+      if (e.t === 'turret' || (e.t === 'nest' && PROTOS[e.proto].enemy?.worm)) { const q = Math.round((e.aim || 0) / (Math.PI * 2) * 32); st.aim = q * Math.PI * 2 / 32; st.flash = (e.fireCd || 0) >= 4; key += `|${q}|${st.flash ? 1 : 0}`; }
+      if (e.t === 'gate') { st.open = !!e.open; key += `|${e.open ? 1 : 0}`; }
+      if (e.t === 'flare' || (e.t === 'engine' && PROTOS[e.proto].burnFluid)) anim = working;
       if (e.t === 'lamp') { st.lit = e.active; st.lampColor = e.ccol; key += `|${e.active ? 1 : 0}|${e.ccol || ''}`; }
       if (e.modules) { st.mods = e.modules; key += `|${e.modules.join(',')}`; }
       if (e.t === 'beacon') { st.working = anim = !!e._on; key += `|${e._on ? 1 : 0}`; }
       if (e.t === 'accumulator') { const f = Math.round((e.charge || 0) / (PROTOS[e.proto].accum!.MJ * 1e6) * 10) / 10; st.fill = f; key += `|${f}`; }
       if (e.t === 'silo') { st.parts = Math.floor((e.parts || 0) / 5) * 5; st.launch = e.launchT ? 1 - e.launchT / 900 : 0; st.working = anim = e.status === 'working' || e.status === 'launching'; key += `|${st.parts}`; if (e.launchT) { force = true; key += `|L${e.id}`; st.t = t; } }
       if (e.t === 'radar') { st.working = anim = e.status === 'working'; }
+      if (e.t === 'reactor' || e.t === 'hexch' || e.t === 'hpipe') { key += this.nucArt(g, e, st); if (e.t === 'reactor') anim = !!st.rod; }
       if (e.t === 'tank' && e._fn) { const n = g.fluidNets[e._fn[0]]; if (n) { st.fill = n.cap ? Math.round(Math.min(1, n.amount / n.cap) * 10) / 10 : 0; st.fluidColor = n.fluid ? ITEMS[n.fluid]?.color : undefined; key += `|${st.fill}|${st.fluidColor}`; } }
       if (e.t === 'nest') anim = true;
       if (e.t === 'arith' || e.t === 'decider') { st.op = e.t === 'arith' ? e.cc?.ar?.op : e.cc?.de?.op; anim = false; key += `|${st.op || ''}`; }
@@ -637,14 +896,32 @@ export class Renderer {
         const a = (e.dir + 2) % 4 * Math.PI / 2 + kk * Math.PI; const len = p.reach! * s * (0.75 + 0.25 * Math.abs(Math.cos(kk * Math.PI)));
         const bx = sx(e.x + .5), by = sy(e.y + .5), ex = bx + Math.sin(a) * len, ey = by - Math.cos(a) * len;
         const mx = bx + Math.sin(a) * len * .5 + Math.cos(a) * s * .12, my = by - Math.cos(a) * len * .5 + Math.sin(a) * s * .12 - s * .2;
-        const ac = this.col(shade(p.color, -.2)); b.line(bx, by, mx, my, s * .1, ac); b.line(mx, my, ex, ey, s * .1, ac);
-        const dk = `dot@${R}`; b.sprite(dk, 'dot', R * .2, R * .2, c => { c.fillStyle = '#333'; c.beginPath(); c.arc(R * .1, R * .1, R * .07, 0, 7); c.fill(); }, ex - s * .1, ey - s * .1, s * .2, s * .2);
+        // v1.14: новый манипулятор — двухзвенная рука с обводкой, шарниры и захват-клешня
+        const ol = this.col('#1c1e21', .85), ac = this.col(shade(p.color, -.15)), hl = this.col(shade(p.color, .35), .8);
+        b.line(bx, by, mx, my, s * .17, ol); b.line(mx, my, ex, ey, s * .14, ol); b.line(bx, by, mx, my, s * .11, ac); b.line(mx, my, ex, ey, s * .085, ac); b.line(bx, by, mx, my, s * .03, hl);
+        const jk = `joint@${R}`; const joint = (x: number, y: number, r: number) => b.sprite(jk, 'joint', R * .4, R * .4, c => { c.fillStyle = '#2a2d31'; c.beginPath(); c.arc(R * .2, R * .2, R * .18, 0, 7); c.fill(); c.fillStyle = '#8a9198'; c.beginPath(); c.arc(R * .2, R * .2, R * .1, 0, 7); c.fill(); }, x - s * r, y - s * r, s * r * 2, s * r * 2);
+        joint(bx, by, .15); joint(mx, my, .11);
+        const cq = ((Math.round(a / (Math.PI * 2) * 16) % 16) + 16) % 16; const ck = `claw|${cq}|${e.hand ? 1 : 0}@${R}`;
+        b.sprite(ck, 'claw', R * .6, R * .6, c => { c.translate(R * .3, R * .3); c.rotate(cq * Math.PI * 2 / 16); c.strokeStyle = '#2a2d31'; c.lineWidth = R * .07; c.lineCap = 'round'; const o = e.hand ? .08 : .14;
+          c.beginPath(); c.moveTo(-R * .08, 0); c.lineTo(-R * o, -R * .18); c.lineTo(-R * .03, -R * .26); c.moveTo(R * .08, 0); c.lineTo(R * o, -R * .18); c.lineTo(R * .03, -R * .26); c.stroke();
+          c.fillStyle = '#4a4f55'; c.beginPath(); c.arc(0, 0, R * .1, 0, 7); c.fill(); }, ex - s * .3, ey - s * .3, s * .6, s * .6);
         if (e.hand) icon(e.hand, ex - s * .18, ey - s * .18, s * .36);
       }
     }
     if (!playerDrawn) drawPlayer();
     b.end();
     const A = b.atlas; this.stat.mid = performance.now() - T0; this.stat.quads = b.quads; this.stat.rast = A.rastN; this.stat.rastMs = A.rastMs; this.stat.evict = A.evictions;
+  }
+  /** v1.16: состояние ядерных построек для рисунка: нагрев (0…1,2, шаг 0,1), стержень, соседи, соединения трубы; возвращает ключ кэша */
+  nucArt(g: Game, e: Entity, st: ArtState): string {
+    if (e.t === 'reactor') { st.heat = Math.round(Math.max(0, Math.min(1.2, (heatTemp(e) - 15) / 985)) * 10) / 10; st.rod = (e.rt || 0) > 0; st.nb = e.rn || 0; st.working = st.rod; return `|h${st.heat}|${st.rod ? 1 : 0}|${st.nb}`; }
+    if (e.t === 'hexch') { st.heat = Math.round(Math.max(0, Math.min(1.2, (heatTemp(e) - 15) / 985)) * 10) / 10; return `|h${st.heat}`; }
+    if (e.t === 'hpipe') {
+      st.heat = Math.round(Math.max(0, Math.min(1.2, (heatTemp(e) - 15) / 985)) * 10) / 10; let m = 0;
+      for (let d = 0; d < 4; d++) { const b = g.entAt(e.x + DX[d], e.y + DY[d]); if (b && isHeatType(b.t) && heatPorts(b).some(q => q.x === e.x + DX[d] && q.y === e.y + DY[d] && q.d === (d + 2) % 4)) m |= 1 << d; }
+      st.mask = m; return `|h${st.heat}|m${m}`;
+    }
+    return '';
   }
   private pads = new Map<string, [number, number, number, number]>();
   /** поля спрайта вокруг клеток постройки (в клетках): измеряются один раз по непрозрачным пикселям рисунка в разных состояниях */
@@ -672,9 +949,13 @@ export class Renderer {
     const bx = sx(e.x + .5), by = sy(e.y + .5);
     const ex = bx + Math.sin(a) * len, ey = by - Math.cos(a) * len;
     const mx = bx + Math.sin(a) * len * .5 + Math.cos(a) * s * .12, my = by - Math.cos(a) * len * .5 + Math.sin(a) * s * .12 - s * .2;
-    c.strokeStyle = shade(p.color, -.2); c.lineCap = 'round'; c.lineWidth = s * .1;
-    c.beginPath(); c.moveTo(bx, by); c.lineTo(mx, my); c.lineTo(ex, ey); c.stroke();
-    c.fillStyle = '#333'; c.beginPath(); c.arc(ex, ey, s * .07, 0, 7); c.fill();
+    c.lineCap = 'round'; c.lineJoin = 'round';
+    c.strokeStyle = 'rgba(28,30,33,.85)'; c.lineWidth = s * .16; c.beginPath(); c.moveTo(bx, by); c.lineTo(mx, my); c.lineTo(ex, ey); c.stroke();
+    c.strokeStyle = shade(p.color, -.15); c.lineWidth = s * .1; c.stroke();
+    c.strokeStyle = shade(p.color, .35); c.lineWidth = s * .03; c.beginPath(); c.moveTo(bx, by); c.lineTo(mx, my); c.stroke();
+    for (const [jx, jy, r] of [[bx, by, .14], [mx, my, .1]]) { c.fillStyle = '#2a2d31'; c.beginPath(); c.arc(jx, jy, s * r, 0, 7); c.fill(); c.fillStyle = '#8a9198'; c.beginPath(); c.arc(jx, jy, s * r * .55, 0, 7); c.fill(); }
+    c.save(); c.translate(ex, ey); c.rotate(a); c.strokeStyle = '#2a2d31'; c.lineWidth = s * .06; const o = e.hand ? .08 : .14;
+    c.beginPath(); c.moveTo(-s * .08, 0); c.lineTo(-s * o, -s * .18); c.lineTo(-s * .03, -s * .26); c.moveTo(s * .08, 0); c.lineTo(s * o, -s * .18); c.lineTo(s * .03, -s * .26); c.stroke(); c.fillStyle = '#4a4f55'; c.beginPath(); c.arc(0, 0, s * .09, 0, 7); c.fill(); c.restore();
     if (e.hand) c.drawImage(itemIcon(e.hand), ex - s * .18, ey - s * .18, s * .36, s * .36);
   }
   /** v1.4: покрытия. Плитки по виду и размеру клетки кешируются; при большом обзоре обходим словарь покрытий, а не клетки экрана */
@@ -683,7 +964,8 @@ export class Renderer {
     const k = f + '|' + z; let cv = this.floorTiles.get(k); if (cv) return cv;
     cv = document.createElement('canvas'); cv.width = cv.height = z; const c = cv.getContext('2d')!; const F = FLOORS[f - 1];
     c.fillStyle = F.color; c.fillRect(0, 0, z, z);
-    if (z >= 12) {
+    if (z >= 12 && floorPattern(c, F.id, z, F.color)) { /* v1.14: декоративные покрытия */ }
+    else if (z >= 12) {
       if (F.id === 'stone-path') { // кирпичная кладка
         c.strokeStyle = 'rgba(40,30,24,.45)'; c.lineWidth = Math.max(1, z / 32);
         for (let r = 0; r < 4; r++) { const y = r * z / 4; c.beginPath(); c.moveTo(0, y); c.lineTo(z, y); c.stroke(); const o = r % 2 ? z / 4 : 0; for (let x = o; x < z; x += z / 2) { c.beginPath(); c.moveTo(x, y); c.lineTo(x, y + z / 4); c.stroke(); } }
@@ -694,11 +976,11 @@ export class Renderer {
         c.strokeStyle = F.fireproof ? 'rgba(200,170,60,.35)' : 'rgba(0,0,0,.28)'; c.lineWidth = Math.max(1, z / 40); c.strokeRect(.5, .5, z - 1, z - 1);
       }
     }
-    if (this.floorTiles.size > 64) this.floorTiles.clear();
+    if (this.floorTiles.size > 160) this.floorTiles.clear();
     this.floorTiles.set(k, cv); return cv;
   }
   private drawFloors(g: Game, c: CanvasRenderingContext2D, x0: number, y0: number, x1: number, y1: number, sx: (n: number) => number, sy: (n: number) => number, s: number) {
-    const z = Math.max(4, Math.min(64, Math.round(s))); const tiles: (HTMLCanvasElement | null)[] = [null, this.floorTile(1, z), this.floorTile(2, z), this.floorTile(3, z)];
+    const z = Math.max(4, Math.min(64, Math.round(s))); const tiles: (HTMLCanvasElement | null)[] = [null]; for (let i = 1; i <= FLOORS.length; i++) tiles.push(FLOORS[i - 1].land ? null : this.floorTile(i, z));
     const sz = Math.ceil(s) + 1;
     const draw = (tx: number, ty: number, f: number) => { const t = tiles[f]; if (t) this.stat.floors++, c.drawImage(t, Math.floor(sx(tx)), Math.floor(sy(ty)), sz, sz); };
     if (g.floors.size < (x1 - x0 + 1) * (y1 - y0 + 1)) {
@@ -712,6 +994,36 @@ export class Renderer {
     c.fillStyle = colr; c.font = `bold ${Math.round(r * 1.2)}px system-ui,sans-serif`; c.textAlign = 'center'; c.textBaseline = 'middle';
     const sym: Record<string, string> = { 'no-power': '⚡', 'low-power': '⚡', 'no-fuel': '🔥', 'no-input': '!', 'output-full': '▣', 'no-recipe': '?', 'no-ore': '⛏', 'no-research': '?', 'no-water': '≈', 'no-robots': '⊘', disabled: '⏸' };
     c.fillText(sym[st] || '!', x, y + 1); c.textBaseline = 'alphabetic';
+  }
+  /** Радиусы выбранных турелей и призрака установки; центры совпадают с симуляцией машины. */
+  private drawTurretRanges(g: Game, c: CanvasRenderingContext2D, v: View, sx: (n: number) => number, sy: (n: number) => number, s: number, x0: number, y0: number, x1: number, y1: number, mapMode: boolean) {
+    if (!v.ranges || mapMode) return;
+    const hasCarTurret = (e: Entity) => e.t === 'car' && !!e.vehicleState?.mounts.some(m => !!m);
+    const list: Entity[] = v.ranges === 1 ? (v.hoverEnt && (PROTOS[v.hoverEnt.proto]?.tur || hasCarTurret(v.hoverEnt)) ? [v.hoverEnt] : []) : [];
+    if (v.ranges === 2) for (const e of g.ents.values()) {
+      if (list.length >= 60) break;
+      if (e.t !== 'turret' && !hasCarTurret(e) || e.x + e.w < x0 || e.x > x1 || e.y + e.h < y0 || e.y > y1) continue;
+      list.push(e);
+    }
+    c.save(); c.lineWidth = 1.5;
+    const draw = (T: TurDef, wx: number, wy: number, label: boolean) => {
+      const R = T.kind === 'art' ? T.range * (1 + g.bonus('ar')) : T.range, px = sx(wx), py = sy(wy);
+      c.fillStyle = 'rgba(255,170,40,.05)'; c.strokeStyle = 'rgba(255,170,40,.75)'; c.setLineDash([]); c.beginPath(); c.arc(px, py, R * s, 0, Math.PI * 2); c.fill(); c.stroke();
+      if (T.min) { c.fillStyle = 'rgba(230,60,50,.12)'; c.strokeStyle = 'rgba(230,60,50,.8)'; c.setLineDash([6, 5]); c.beginPath(); c.arc(px, py, T.min * s, 0, Math.PI * 2); c.fill(); c.stroke(); }
+      if (label && s >= 8) { c.setLineDash([]); c.fillStyle = '#ffd890'; c.font = '12px system-ui,sans-serif'; c.textAlign = 'center'; c.fillText(tr(`дальность ${R.toFixed(R % 1 ? 1 : 0)}${T.min ? ` · мёртвая зона ${T.min}` : ''}`), px, py - R * s - 6); }
+    };
+    for (const e of list) {
+      if (e.t === 'car') for (let slot = 0; slot < (e.vehicleState?.mounts.length || 0); slot++) {
+        const m = e.vehicleState!.mounts[slot]; if (!m) continue;
+        const T = PROTOS[m.proto]?.tur; if (T) draw(T, e.vehicleState!.x + (slot ? 0.55 : -0.55), e.vehicleState!.y + (slot ? -0.2 : 0.2), v.ranges === 1);
+      }
+      else { const T = PROTOS[e.proto]?.tur; if (T) draw(T, e.x + e.w / 2, e.y + e.h / 2, v.ranges === 1); }
+    }
+    if (v.cursor && v.ghostPos) {
+      const proto = ITEMS[v.cursor]?.place, p = proto ? PROTOS[proto] : undefined, T = p?.tur;
+      if (p && T) { const w = v.rot % 2 ? p.h : p.w, h = v.rot % 2 ? p.w : p.h; draw(T, v.ghostPos[0] + w / 2, v.ghostPos[1] + h / 2, v.ranges === 1); }
+    }
+    c.restore();
   }
   /** зоны робопортов; при Alt — все, иначе тоже все (сеть видна целиком), плюс зона ставимого робопорта и личного */
   private drawZones(g: Game, c: CanvasRenderingContext2D, sx: (n: number) => number, sy: (n: number) => number, s: number, place: [number, number] | null) {
@@ -746,9 +1058,104 @@ export class Renderer {
     if (st === 'wait') { c.strokeStyle = 'rgba(124,196,255,.8)'; c.lineWidth = Math.max(1, r * .12); c.beginPath(); c.arc(x, y, r * 1.25, (t % 60) / 60 * 6.28, (t % 60) / 60 * 6.28 + 1.6); c.stroke(); }
   }
   private droneCache = new Map<number, HTMLCanvasElement>();
+  /** Stateful 1.17 combat drones and engineered bioforms; kept on this shared layer so all renderers show the same actors. */
+  private drawV117Actors(g: Game, c: CanvasRenderingContext2D, v: View, sx: (n: number) => number, sy: (n: number) => number, s: number, x0: number, y0: number, x1: number, y1: number, t: number, mapMode: boolean, dpr: number) {
+    const mouse = v.mouseIn ? this.screenToWorld(v.mouseX * dpr, v.mouseY * dpr) : null;
+    if (v.selectedDroneId != null && !g.v117.drones.instances.some(d => d.id === v.selectedDroneId)) v.selectedDroneId = null;
+    const sourceWeight = (family: string) => BIO_V117_SOURCES.find(x => x.form === family)?.w || 0;
+    const worldW = g.v117.genetics.forms.reduce((sum, f) => sum + (!f.dead ? sourceWeight(f.family) : 0), 0);
+    const worldWCap = g.dedicatedServer ? 256 : g.nPlayers > 1 ? 128 : 24;
+    v.hoverDroneId = null;
+    let hoverLabel: string | null = null, hoverAt: [number, number] | null = null;
+    const palette: Record<string, string> = { gunner: '#63b7ff', interceptor: '#72f4ee', rocket: '#ff9858', tesla: '#f7df5b', flame: '#ff684d', repair: '#83e98c' };
+    const symbols: Record<string, string> = { gunner: '•', interceptor: '›', rocket: '▲', tesla: 'ϟ', flame: '♨', repair: '+' };
+    for (const d of g.v117.drones.instances) {
+      if (d.hp <= 0) continue;
+      if (d.x < x0 - 1 || d.x > x1 + 1 || d.y < y0 - 2 || d.y > y1 + 2) continue;
+      const def = DRONE_MODELS[d.model]; if (!def) continue;
+      const radius = Math.max(.3, def.air ? .48 : .4), hovered = !!mouse && Math.hypot(mouse[0] - d.x, mouse[1] - d.y) <= radius;
+      if (hovered) v.hoverDroneId = d.id;
+      const X = sx(d.x), groundY = sy(d.y), airborne = d.mode !== 'landed' && d.mode !== 'disabled';
+      const bob = airborne ? Math.sin((t + d.id * 11) * .13) * s * .035 : 0, Y = groundY - (airborne ? s * (d.mode === 'repair' ? .15 : .46) : 0) + bob;
+      const size = Math.max(8, s * (d.model === 'rocket' || d.model === 'tesla' ? .86 : .72));
+      if (mapMode) { c.fillStyle = palette[d.model]; c.beginPath(); c.arc(X, Y, Math.max(2, size * .16), 0, Math.PI * 2); c.fill(); }
+      else {
+        c.fillStyle = 'rgba(0,0,0,.35)'; c.beginPath(); c.ellipse(X + size * .2, groundY + s * .08, size * .34, size * .14, 0, 0, Math.PI * 2); c.fill();
+        if (d.mode === 'landed' || d.mode === 'disabled') { c.strokeStyle = d.mode === 'disabled' ? '#ef6d5b' : '#d6d6a0'; c.lineWidth = Math.max(1, s * .035); c.setLineDash([Math.max(2, s * .08), Math.max(2, s * .06)]); c.beginPath(); c.ellipse(X, groundY, size * .45, size * .23, 0, 0, Math.PI * 2); c.stroke(); c.setLineDash([]); }
+        drone(c, X, Y, size, true, (t >> 3) & 1, d.model === 'repair' || d.model === 'tesla');
+        c.save(); c.translate(X, Y); c.rotate(d.cooldown ? Math.PI / 10 : 0); c.strokeStyle = palette[d.model]; c.fillStyle = palette[d.model]; c.lineWidth = Math.max(1.5, size * .12); c.lineCap = 'round';
+        if (d.model === 'gunner') { c.beginPath(); c.moveTo(size * .12, 0); c.lineTo(size * .48, 0); c.stroke(); c.beginPath(); c.arc(-size * .05, 0, size * .08, 0, Math.PI * 2); c.fill(); }
+        else if (d.model === 'interceptor') { c.beginPath(); c.moveTo(-size * .1, 0); c.lineTo(-size * .43, -size * .28); c.lineTo(-size * .28, 0); c.lineTo(-size * .43, size * .28); c.closePath(); c.fill(); }
+        else if (d.model === 'rocket') { c.beginPath(); c.moveTo(size * .36, 0); c.lineTo(size * .05, -size * .2); c.lineTo(size * .12, 0); c.lineTo(size * .05, size * .2); c.closePath(); c.fill(); }
+        else if (d.model === 'tesla') { c.beginPath(); c.moveTo(size * .17, -size * .25); c.lineTo(-size * .04, 0); c.lineTo(size * .12, 0); c.lineTo(-size * .15, size * .27); c.stroke(); }
+        else if (d.model === 'flame') { c.beginPath(); c.moveTo(-size * .2, -size * .12); c.quadraticCurveTo(-size * .5, 0, -size * .2, size * .18); c.stroke(); }
+        else { c.beginPath(); c.moveTo(-size * .16, 0); c.lineTo(size * .16, 0); c.moveTo(0, -size * .16); c.lineTo(0, size * .16); c.stroke(); }
+        c.restore();
+        this.hpBar(c, X, Y - size * .62, size * .8, d.hp / d.maxHp, false);
+      }
+      if (hovered || v.selectedDroneId === d.id) {
+        const selected = v.selectedDroneId === d.id;
+        c.strokeStyle = selected ? '#fff1a6' : '#b9eeff'; c.lineWidth = Math.max(1.5, s * .045); c.beginPath(); c.arc(X, Y, Math.max(size * .62, 6), 0, Math.PI * 2); c.stroke();
+        if (selected || !hoverLabel) {
+          const item = ITEMS[`combat-drone-${d.model}`];
+          hoverLabel = `${tr(item?.name || d.model)} #${d.id} · ${Math.ceil(d.hp)}/${d.maxHp} HP · ${(d.charge / 1e6).toFixed(2)} МДж${d.ammoType ? ` · ${d.ammo}` : ''}${selected ? ` · ${tr(d.mode === 'landed' || d.mode === 'disabled' ? 'Shift+F — забрать' : 'Shift+F — вернуть')}` : ''}`;
+          hoverAt = [d.x, d.y];
+        }
+      }
+    }
+    for (const f of g.v117.genetics.forms) {
+      if (f.dead || f.x < x0 - 2 || f.x > x1 + 2 || f.y < y0 - 2 || f.y > y1 + 2) continue;
+      const isWorm = f.family.startsWith('worm-'), wormProto = PROTOS[f.family], wormSize = isWorm ? Math.max(wormProto?.w || 2, wormProto?.h || 2) : 0;
+      const art = f.family, unit = UNITS[art] || UNITS.small, bodySize = isWorm ? wormSize : unit.size, radius = Math.max(.35, bodySize * .48), X = sx(f.x), Y = sy(f.y);
+      const hovered = !!mouse && Math.hypot(mouse[0] - f.x, mouse[1] - f.y) <= radius;
+      const target = f.target == null ? null : g.ents.get(f.target), wp = f.order.waypoints[0];
+      const angle = target ? Math.atan2(target.y + target.h / 2 - f.y, target.x + target.w / 2 - f.x) : wp ? Math.atan2(wp.y + .5 - f.y, wp.x + .5 - f.x) : 0;
+      if (mapMode) { c.fillStyle = '#43d0a5'; c.fillRect(X - bodySize * s / 2, Y - bodySize * s / 2, bodySize * s, bodySize * s); }
+      else {
+        if (f.sterile) { c.fillStyle = 'rgba(80,255,200,.12)'; c.beginPath(); c.arc(X, Y, bodySize * s * .58, 0, Math.PI * 2); c.fill(); }
+        if (isWorm && f.wormStage === 'deployed') {
+          c.save(); c.translate(sx(f.x - wormSize / 2), sy(f.y - wormSize / 2));
+          drawSwarmStructure(c, f.family, wormSize * s, wormSize * s, s, t, f.id, false, angle);
+          c.restore();
+          c.strokeStyle = 'rgba(72,235,190,.88)'; c.lineWidth = Math.max(1.5, s * .045); c.strokeRect(X - wormSize * s / 2 + 1, Y - wormSize * s / 2 + 1, wormSize * s - 2, wormSize * s - 2);
+        } else if (isWorm) {
+          // During the five-second fold/unfold or travel phase the paid carrier
+          // is visible as a compact mechanical sled carrying the folded worm.
+          const carrierSize = Math.max(10, s * 1.05);
+          c.fillStyle = 'rgba(0,0,0,.35)'; c.beginPath(); c.ellipse(X + s * .12, Y + s * .24, carrierSize * .52, carrierSize * .2, 0, 0, Math.PI * 2); c.fill();
+          c.save(); c.translate(X, Y); c.rotate(angle);
+          c.fillStyle = '#52666c'; c.strokeStyle = '#b6d9c8'; c.lineWidth = Math.max(1, s * .035); c.fillRect(-carrierSize * .42, -carrierSize * .18, carrierSize * .84, carrierSize * .36); c.strokeRect(-carrierSize * .42, -carrierSize * .18, carrierSize * .84, carrierSize * .36);
+          for (const side of [-1, 1]) { c.fillStyle = '#20292c'; c.beginPath(); c.arc(side * carrierSize * .28, carrierSize * .2, carrierSize * .12, 0, Math.PI * 2); c.fill(); c.strokeStyle = '#9cb2a8'; c.stroke(); }
+          c.fillStyle = '#73c895'; c.beginPath(); c.ellipse(0, -carrierSize * .06, carrierSize * .22, carrierSize * .19, 0, 0, Math.PI * 2); c.fill();
+          c.restore();
+          c.save(); c.translate(X - carrierSize * .2, Y - carrierSize * .42);
+          drawSwarmStructure(c, f.family, carrierSize * .42, carrierSize * .42, carrierSize * .21, t, f.id, false, angle);
+          c.restore();
+        } else drawSwarmUnit(c, art, X, Y, s * .67, angle, t * .12 + f.id, false, 0);
+        this.hpBar(c, X, Y - bodySize * s * .58, bodySize * s * .8, f.hp / f.maxHp, false);
+        if (f.detonationTicks !== undefined) {
+          c.strokeStyle = '#ff854d'; c.lineWidth = Math.max(1.5, s * .04); c.beginPath(); c.arc(X, Y, (UNITS.destroyer.boom || 2.5) * s, 0, Math.PI * 2); c.stroke();
+          c.fillStyle = '#ffb482'; c.font = `bold ${Math.max(10, Math.round(s * .3))}px system-ui`; c.textAlign = 'center'; c.fillText(`${(f.detonationTicks / TICKS).toFixed(1)} s`, X, Y - bodySize * s * .9);
+        }
+        const foodSeconds = bioFoodSeconds(f);
+        if (foodSeconds <= 120) { c.fillStyle = '#ffcc55'; c.font = `bold ${Math.max(9, Math.round(s * .25))}px system-ui`; c.textAlign = 'center'; c.fillText('!', X, Y - bodySize * s * .75); }
+      }
+      if (hovered) {
+        const source = BIO_V117_SOURCES.find(x => x.kind === f.family), weight = sourceWeight(f.family), minutes = (bioFoodSeconds(f) / 60).toFixed(1);
+        const wormState = isWorm ? ` · ${tr(f.wormStage === 'deployed' ? 'Развёрнут' : f.wormStage === 'travelling' ? 'Транспортируется' : 'Складывается/разворачивается')}` : '';
+        hoverLabel = `${tr('Биоотряд')} ${tr(source?.label || f.family)}${wormState} · ${Math.ceil(f.hp)}/${f.maxHp} HP · ${tr('Питание')} ${minutes} ${tr('мин')} · W ${weight} (${worldW}/${worldWCap})`;
+        hoverAt = [f.x, f.y];
+      }
+    }
+    if (hoverLabel && hoverAt && !mapMode) {
+      c.save(); c.font = `${Math.round(11 * dpr)}px system-ui,sans-serif`; c.textAlign = 'center'; c.textBaseline = 'bottom';
+      const x = sx(hoverAt[0]), y = sy(hoverAt[1]) - Math.max(14, s * .55), w = c.measureText(hoverLabel).width + 10 * dpr;
+      c.fillStyle = 'rgba(5,10,14,.84)'; c.fillRect(x - w / 2, y - 17 * dpr, w, 18 * dpr); c.fillStyle = '#eaf4e8'; c.fillText(hoverLabel, x, y - 2 * dpr); c.restore();
+    }
+  }
   /** роботы из буфера x, y, груз, флаги (sim/robots.ts robotBuffer) */
   private drawRobots(g: Game, c: CanvasRenderingContext2D, sx: (n: number) => number, sy: (n: number) => number, s: number, x0: number, y0: number, x1: number, y1: number, t: number, mapMode: boolean) {
-    const a = robotView(g, ITEM_IDX).buf; const n = a.length / ROBOT_STRIDE; if (!n) return;
+    const a = robotView(g, ITEM_IDX).buf; const n = a.length / ROBOT_STRIDE; if (!n && !g.bioRobots.length) return;
     const sz = Math.max(6, Math.round(s * .7)); const q = Math.min(128, Math.round(sz / 4) * 4 || 4);
     const sprite = (lg: number) => { const key = q * 4 + ((t >> 3) & 1) * 2 + lg; let spr = this.droneCache.get(key);
       if (!spr) { spr = document.createElement('canvas'); spr.width = spr.height = q; drone(spr.getContext('2d')!, q / 2, q / 2, q * .95, true, (t >> 3) & 1, !!lg); this.droneCache.set(key, spr); } return spr; };
@@ -764,6 +1171,23 @@ export class Renderer {
       const ci = a[o + 2]; if (ci >= 0 && s >= 12) { const it = ITEM_IDS[ci]; if (it) c.drawImage(itemIcon(it), X - s * .16, Y + sz * .22, s * .32, s * .32); }
       if (f & 4 && (t >> 4) % 2 === 0) { c.fillStyle = '#e8c22e'; c.font = `bold ${Math.round(s * .3)}px system-ui`; c.textAlign = 'center'; c.fillText('⚡', X, Y - sz * .45); }
     }
+    for (const r of g.bioRobots) {
+      if (r.x < x0 || r.x > x1 || r.y < y0 - 2 || r.y > y1 + 2) continue;
+      this.stat.robots++;
+      const X = sx(r.x), Y = sy(r.y) - s * .48, radius = Math.max(2.5, sz * .38);
+      if (mapMode) { c.fillStyle = '#38d8c3'; c.fillRect(X - 2, Y - 2, 4, 4); continue; }
+      c.fillStyle = 'rgba(0,0,0,.35)'; c.beginPath(); c.ellipse(X + s * .18, sy(r.y) + s * .12, radius * .95, radius * .38, 0, 0, 7); c.fill();
+      c.fillStyle = '#167e79'; c.strokeStyle = '#9dfff0'; c.lineWidth = Math.max(1, s * .035); c.beginPath(); c.arc(X, Y, radius, 0, 7); c.fill(); c.stroke();
+      c.fillStyle = '#d7fff7'; c.fillRect(X - radius * .35, Y - radius * .2, radius * .7, radius * .4);
+      if (r.cargo && s >= 13) { c.fillStyle = '#ffc65c'; c.beginPath(); c.arc(X + radius * .8, Y + radius * .7, Math.max(2, s * .08), 0, 7); c.fill(); }
+      if (r.charge < 300_000) { c.fillStyle = '#242424'; c.fillRect(X - radius, Y + radius + 1, radius * 2, Math.max(2, s * .05)); c.fillStyle = '#edb74e'; c.fillRect(X - radius, Y + radius + 1, radius * 2 * Math.max(0, r.charge / 300_000), Math.max(2, s * .05)); }
+    }
+  }
+  private drawBioRange(g: Game, c: CanvasRenderingContext2D, v: View, sx: (n: number) => number, sy: (n: number) => number, s: number, mapMode: boolean) {
+    const e = v.hoverEnt; if (mapMode || e?.t !== 'bioport') return;
+    c.save(); c.strokeStyle = 'rgba(69,224,203,.72)'; c.fillStyle = 'rgba(69,224,203,.055)'; c.lineWidth = Math.max(1, s * .035); c.setLineDash([Math.max(3, s * .22), Math.max(2, s * .12)]);
+    const x = sx(e.x + e.w / 2), y = sy(e.y + e.h / 2), r = (PROTOS[e.proto].bio?.range || 24) * s;
+    c.beginPath(); c.arc(x, y, r, 0, 7); c.fill(); c.stroke(); c.restore();
   }
   private markX(c: CanvasRenderingContext2D, x: number, y: number, r: number) {
     c.strokeStyle = 'rgba(0,0,0,.6)'; c.lineWidth = Math.max(3, r * .5); c.lineCap = 'round'; c.beginPath(); c.moveTo(x - r, y - r); c.lineTo(x + r, y + r); c.moveTo(x + r, y - r); c.lineTo(x - r, y + r); c.stroke();
@@ -777,41 +1201,85 @@ export class Renderer {
     const h = Math.max(3, w * .08); c.fillStyle = 'rgba(0,0,0,.7)'; c.fillRect(x - w / 2 - 1, y - 1, w + 2, h + 2);
     c.fillStyle = enemy ? '#d8443a' : f > .5 ? '#5fd35f' : f > .25 ? '#e8c22e' : '#e8503a'; c.fillRect(x - w / 2, y, w * Math.max(0, f), h);
   }
-  /** юнит Роя: процедурный «жук» с анимированными лапами */
-  private drawUnit(c: CanvasRenderingContext2D, u: Unit, x: number, y: number, s: number, t: number, phOverride?: number) {
-    const d = UNITS[u.k]; const L = d.size * s * 1.45; const ph = phOverride ?? (t + u.id * 7) * (0.35 + d.speed);
-    c.save(); c.translate(x, y);
-    c.fillStyle = 'rgba(0,0,0,.3)'; c.beginPath(); c.ellipse(L * .08, L * .12, L * .45, L * .3, 0, 0, 7); c.fill();
-    c.rotate(u.ang + Math.PI / 2);
-    c.strokeStyle = shade(d.color, -.55); c.lineWidth = Math.max(1, L * .07); c.lineCap = 'round';
-    for (let i = 0; i < 3; i++) for (const sd of [-1, 1]) {
-      const sw = Math.sin(ph + i * 2.1 + (sd > 0 ? Math.PI : 0)) * .25; const by = (-.15 + i * .2) * L;
-      c.beginPath(); c.moveTo(sd * L * .12, by); c.lineTo(sd * L * .38, by - L * (.08 - sw * .5)); c.lineTo(sd * L * .5, by + L * (.12 + sw)); c.stroke();
+  /** юнит Роя (v1.14: облик по виду, элита, мутации) */
+  private drawUnit(c: CanvasRenderingContext2D, u: Unit, x: number, y: number, s: number, t: number, phOverride?: number, mut = 0) {
+    const d = UNITS[u.k] || UNITS.small; const ph = phOverride ?? (t + u.id * 7) * (0.35 + d.speed);
+    drawSwarmUnit(c, u.k, x, y, s, u.ang, ph, !!u.el, mut);
+  }
+  private creepCv = new Map<number, { ch: Chunk; v: number; around: number[]; cv: HTMLCanvasElement; used: number }>();
+  private creepWorld: World | null = null;
+  private hasCreep(ch: Chunk | undefined | null): ch is Chunk { return !!ch?.creep; }
+  private creepCanvas(w: World, ch: Chunk): HTMLCanvasElement {
+    if (this.creepWorld !== w) { this.creepWorld = w; this.creepCv.clear(); }
+    const key = ckey(ch.cx, ch.cy);
+    const around: number[] = [];
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const neighbor = w.chunks.get(ckey(ch.cx + dx, ch.cy + dy)); around.push(neighbor ? 1 : 0, neighbor?.cv || 0);
     }
-    const g1 = c.createRadialGradient(-L * .08, L * .1, L * .02, 0, L * .18, L * .32); g1.addColorStop(0, shade(d.color, .35)); g1.addColorStop(1, shade(d.color, -.4));
-    c.fillStyle = g1; c.beginPath(); c.ellipse(0, L * .2, L * .22, L * .3, 0, 0, 7); c.fill();
-    if (d.ranged) { c.fillStyle = 'rgba(190,255,90,.75)'; c.beginPath(); c.ellipse(0, L * .3, L * .14, L * .17, 0, 0, 7); c.fill(); }
-    const g2 = c.createRadialGradient(-L * .05, -L * .2, L * .02, 0, -L * .15, L * .2); g2.addColorStop(0, shade(d.color, .25)); g2.addColorStop(1, shade(d.color, -.5));
-    c.fillStyle = g2; c.beginPath(); c.ellipse(0, -L * .17, L * .16, L * .18, 0, 0, 7); c.fill();
-    c.strokeStyle = shade(d.color, -.65); c.lineWidth = Math.max(1, L * .05); const m = Math.sin(phOverride ?? (t * .4 + u.id)) * .15;
-    c.beginPath(); c.moveTo(-L * .07, -L * .3); c.quadraticCurveTo(-L * .14, -L * .45, -L * (.02 + m * .2), -L * .48); c.moveTo(L * .07, -L * .3); c.quadraticCurveTo(L * .14, -L * .45, L * (.02 + m * .2), -L * .48); c.stroke();
-    c.fillStyle = '#ff5030'; c.beginPath(); c.arc(-L * .07, -L * .22, L * .03, 0, 7); c.arc(L * .07, -L * .22, L * .03, 0, 7); c.fill();
-    c.restore();
+    const r = this.creepCv.get(key);
+    if (r && r.ch === ch && r.v === (ch.cv || 0) && r.around.every((v, i) => v === around[i])) { r.used = this.frame; return r.cv; }
+    const pxPerTile = 8, cv = r?.cv || document.createElement('canvas'); cv.width = cv.height = CHUNK * pxPerTile;
+    const x = cv.getContext('2d')!, cr = ch.creep!;
+    const strengthAt = (tx: number, ty: number) => {
+      const ccx = Math.floor(tx / CHUNK), ccy = Math.floor(ty / CHUNK), c = w.chunks.get(ckey(ccx, ccy));
+      if (!c?.creep) return 0;
+      const lx = ((tx % CHUNK) + CHUNK) % CHUNK, ly = ((ty % CHUNK) + CHUNK) % CHUNK;
+      return c.creep[ly * CHUNK + lx] || 0;
+    };
+    const dirs = [[0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1]];
+    for (let i = 0; i < CHUNK * CHUNK; i++) {
+      const strength = cr[i]; if (!strength) continue;
+      const lx = i % CHUNK, ly = Math.floor(i / CHUNK), tx = ch.cx * CHUNK + lx, ty = ch.cy * CHUNK + ly;
+      let mask = 0; for (let bit = 0; bit < dirs.length; bit++) if (strengthAt(tx + dirs[bit][0], ty + dirs[bit][1])) mask |= 1 << bit;
+      const seed = (hash2(tx, ty, w.seed) * 0x100000000) | 0;
+      drawCreepTile(x, lx * pxPerTile, ly * pxPerTile, pxPerTile, strength, mask, seed);
+    }
+    this.creepCv.set(key, { ch, v: ch.cv || 0, around, cv, used: this.frame });
+    if (this.creepCv.size > 64) {
+      let oldestKey = key, oldest = Infinity;
+      for (const [cacheKey, entry] of this.creepCv) if (entry.used < oldest) { oldest = entry.used; oldestKey = cacheKey; }
+      this.creepCv.delete(oldestKey);
+    }
+    return cv;
   }
   private drawFx(g: Game, c: CanvasRenderingContext2D, sx: (n: number) => number, sy: (n: number) => number, s: number) {
+    const T = g.tick;
+    // v1.14: лужи кислоты, пламя, ракеты и снаряды
+    for (const a of g.acids) { const x = sx(a.x), y = sy(a.y), R = a.r * s; const al = Math.min(1, a.t / 60) * .55;
+      const gr = c.createRadialGradient(x, y, 0, x, y, R); gr.addColorStop(0, a.owner === undefined ? `rgba(170,240,70,${al})` : `rgba(70,240,195,${al})`); gr.addColorStop(.7, a.owner === undefined ? `rgba(110,190,40,${al * .8})` : `rgba(35,175,160,${al * .8})`); gr.addColorStop(1, a.owner === undefined ? 'rgba(80,140,30,0)' : 'rgba(25,145,130,0)');
+      c.fillStyle = gr; c.beginPath(); c.ellipse(x, y, R, R * .8, 0, 0, 7); c.fill();
+      c.fillStyle = `rgba(220,255,160,${al})`; for (let i = 0; i < 3; i++) { const ph = (T * .05 + i * 2.1 + a.x) % 1; c.beginPath(); c.arc(x + Math.cos(i * 2.1 + a.y) * R * .5, y + Math.sin(i * 2.1 + a.x) * R * .35, s * .06 * (1 + ph), 0, 7); c.fill(); } }
+    for (const f of g.fires) { const x = sx(f.x), y = sy(f.y), R = f.r * s; const al = Math.min(1, f.t / 40);
+      const gr = c.createRadialGradient(x, y, 0, x, y, R); gr.addColorStop(0, `rgba(255,230,120,${al * .8})`); gr.addColorStop(.5, `rgba(255,120,30,${al * .55})`); gr.addColorStop(1, 'rgba(120,30,10,0)');
+      c.fillStyle = gr; c.beginPath(); c.arc(x, y, R, 0, 7); c.fill();
+      for (let i = 0; i < 4; i++) { const ph = ((T * .07 + i * .27 + f.x * .13) % 1); const fx = x + Math.sin(i * 1.7 + f.y) * R * .5, fy = y - ph * s * .9; c.fillStyle = `rgba(255,${160 - ph * 100 | 0},40,${(1 - ph) * al * .8})`; c.beginPath(); c.arc(fx, fy, s * .16 * (1 - ph * .5), 0, 7); c.fill(); } }
+    for (const p of g.shots) { const x = sx(p.x), y = sy(p.y); const a = Math.atan2(p.ty - p.sy, p.tx - p.sx);
+      if (p.k === 'rocket' || p.k === 'prock') { c.strokeStyle = 'rgba(200,200,200,.45)'; c.lineWidth = s * .12; c.beginPath(); c.moveTo(x, y); c.lineTo(x - Math.cos(a) * s * .9, y - Math.sin(a) * s * .9); c.stroke();
+        c.save(); c.translate(x, y); c.rotate(a); c.fillStyle = '#c8ccd0'; c.fillRect(-s * .22, -s * .05, s * .32, s * .1); c.fillStyle = '#d83a2a'; c.beginPath(); c.moveTo(s * .1, -s * .05); c.lineTo(s * .2, 0); c.lineTo(s * .1, s * .05); c.fill(); c.fillStyle = 'rgba(255,200,80,.9)'; c.beginPath(); c.arc(-s * .26, 0, s * .07, 0, 7); c.fill(); c.restore(); }
+      else if (p.k === 'flame') { c.fillStyle = 'rgba(255,150,40,.7)'; c.beginPath(); c.arc(x, y, s * .22, 0, 7); c.fill(); }
+      else { const D = Math.hypot(p.tx - p.sx, p.ty - p.sy) || 1, k = Math.min(1, Math.hypot(p.x - p.sx, p.y - p.sy) / D); const hgt = Math.sin(k * Math.PI) * Math.min(6, D * .25) * s;
+        c.fillStyle = 'rgba(0,0,0,.3)'; c.beginPath(); c.ellipse(x, y, s * .12, s * .07, 0, 0, 7); c.fill();
+        c.fillStyle = p.k === 'art' ? '#e8d070' : '#b8b0a0'; c.beginPath(); c.arc(x, y - hgt, s * (p.k === 'art' ? .16 : .12), 0, 7); c.fill(); c.strokeStyle = 'rgba(255,220,140,.4)'; c.lineWidth = s * .05; c.beginPath(); c.moveTo(x, y - hgt); c.lineTo(x - Math.cos(a) * s * .5, y - hgt - Math.sin(a) * s * .5 + s * .1); c.stroke(); } }
     for (const p of g.projectiles) {
-      const x = sx(p.x), y = sy(p.y); const gr = c.createRadialGradient(x, y, 0, x, y, s * .3); gr.addColorStop(0, 'rgba(220,255,120,1)'); gr.addColorStop(1, 'rgba(120,200,40,0)');
+      const x = sx(p.x), y = sy(p.y); const gr = c.createRadialGradient(x, y, 0, x, y, s * .3); gr.addColorStop(0, p.owner === undefined ? 'rgba(220,255,120,1)' : 'rgba(120,255,220,1)'); gr.addColorStop(1, p.owner === undefined ? 'rgba(120,200,40,0)' : 'rgba(40,200,175,0)');
       c.fillStyle = gr; c.beginPath(); c.arc(x, y, s * .3, 0, 7); c.fill();
     }
     for (const f of g.fx) {
       const x = sx(f.x), y = sy(f.y);
       if (f.k === 'tracer') { c.strokeStyle = `rgba(255,230,140,${f.t / 4})`; c.lineWidth = Math.max(1, s * .05); c.beginPath(); c.moveTo(x, y); c.lineTo(sx(f.x2!), sy(f.y2!)); c.stroke(); c.fillStyle = 'rgba(255,240,180,.9)'; c.beginPath(); c.arc(sx(f.x2!), sy(f.y2!), s * .08, 0, 7); c.fill(); }
       else if (f.k === 'boom') {
-        const k = 1 - f.t / 40, R = s * (f.s || 1) * (.4 + k * 1.1);
+        const k = Math.max(0, Math.min(1, 1 - f.t / (f.life ?? 40))), R = Math.max(0, s * (f.s || 1) * (.4 + k * 1.1));
         const gr = c.createRadialGradient(x, y, 0, x, y, R); gr.addColorStop(0, `rgba(255,240,180,${(1 - k) * .95})`); gr.addColorStop(.4, `rgba(255,140,40,${(1 - k) * .8})`); gr.addColorStop(1, 'rgba(60,40,30,0)');
         c.fillStyle = gr; c.beginPath(); c.arc(x, y, R, 0, 7); c.fill();
         c.fillStyle = `rgba(50,45,40,${k * .5})`; for (let i = 0; i < 5; i++) { const a = i * 1.26 + f.x; c.beginPath(); c.arc(x + Math.cos(a) * R * .5, y + Math.sin(a) * R * .5 - k * s * .5, R * .35, 0, 7); c.fill(); }
       } else if (f.k === 'acid') { c.fillStyle = `rgba(150,220,60,${f.t / 40 * .55})`; c.beginPath(); c.ellipse(x, y, s * 1.1, s * .8, 0, 0, 7); c.fill(); }
+      else if (f.k === 'laser') { const al = Math.min(1, f.t / 6); c.lineCap = 'round'; c.strokeStyle = `rgba(255,60,60,${al * .5})`; c.lineWidth = s * .22; c.beginPath(); c.moveTo(x, y); c.lineTo(sx(f.x2!), sy(f.y2!)); c.stroke(); c.strokeStyle = `rgba(255,220,220,${al})`; c.lineWidth = s * .06; c.stroke(); c.lineCap = 'butt'; }
+      else if (f.k === 'rail') { const al = Math.min(1, f.t / 20); c.strokeStyle = `rgba(120,200,255,${al * .4})`; c.lineWidth = s * .35 * al; c.beginPath(); c.moveTo(x, y); c.lineTo(sx(f.x2!), sy(f.y2!)); c.stroke(); c.strokeStyle = `rgba(230,250,255,${al})`; c.lineWidth = s * .08; c.stroke(); }
+      else if (f.k === 'arc') { const al = Math.min(1, f.t / 8); const pts = f.pts || [f.x, f.y, f.x2!, f.y2!]; c.strokeStyle = `rgba(150,200,255,${al})`; c.lineWidth = Math.max(1, s * .07); c.beginPath();
+        for (let i = 0; i + 3 < pts.length; i += 2) { const ax = sx(pts[i]), ay = sy(pts[i + 1]), bx = sx(pts[i + 2]), by = sy(pts[i + 3]); if (i === 0) c.moveTo(ax, ay); for (let j = 1; j <= 4; j++) { const k = j / 4, jit = j < 4 ? (hash2(i * 7 + j, f.t, 3) - .5) * s * .6 : 0; c.lineTo(ax + (bx - ax) * k + jit, ay + (by - ay) * k - jit); } } c.stroke(); }
+      else if (f.k === 'flame') { const al = Math.min(1, f.t / 10); c.fillStyle = `rgba(255,140,40,${al * .6})`; c.beginPath(); c.arc(sx(f.x2 ?? f.x), sy(f.y2 ?? f.y), s * .3, 0, 7); c.fill(); }
+      else if (f.k === 'blast') { const k = Math.max(0, Math.min(1, 1 - f.t / (f.life ?? 30))), R = Math.max(0, s * (f.s || 2) * (.3 + k * .9)); c.strokeStyle = `rgba(255,220,160,${(1 - k) * .9})`; c.lineWidth = s * .15 * (1 - k) + 1; c.beginPath(); c.arc(x, y, R, 0, 7); c.stroke(); }
+      else if (f.k === 'regrow') { const al = f.t / 60; c.strokeStyle = `rgba(190,90,200,${al * .7})`; c.lineWidth = 2; c.beginPath(); c.arc(x, y, s * (2 - al) * 1.5, 0, 7); c.stroke(); }
       else if (f.k === 'hit') { c.fillStyle = `rgba(120,60,40,${f.t / 30 * .8})`; const R = s * (f.s || .6); for (let i = 0; i < 6; i++) { const a = i * 1.05 + f.y; c.beginPath(); c.arc(x + Math.cos(a) * R * .4 * (1.5 - f.t / 30), y + Math.sin(a) * R * .4 * (1.5 - f.t / 30), R * .18, 0, 7); c.fill(); } }
     }
   }
@@ -827,23 +1295,25 @@ export class Renderer {
     if (mv.peers.length < 2) return;
     c.font = `bold ${Math.max(11, Math.round(s * .36))}px sans-serif`; c.textAlign = 'center'; c.textBaseline = 'bottom';
     mv.peers.forEach((p, i) => {
-      if (p.x < x0 - 2 || p.x > x1 + 2 || p.y < y0 - 2 || p.y > y1 + 2) return;
-      const x = sx(p.x), y = sy(p.y);
+      if (p.x < x0 - 2 || p.x > x1 + 2 || p.y < y0 - 2 || p.y > y1 + 2 || p.off === 2) return; // v1.13: ушедший больше 5 мин назад — не виден
+      const x = sx(p.x), y = sy(p.y); const off = !!p.off && i !== me;
+      if (off) c.globalAlpha = .45; // v1.13: нет связи — персонаж полупрозрачный и ждёт
       if (i !== me && !p.dead && p.veh == null) this.drawPlayer(g, x, y, s, c, p as any, p.color);
+      c.globalAlpha = 1;
       if (i === me) return;
-      const t = (p.name || '') + (p.dead ? ' ✝' : ''); const w = c.measureText(t).width + 8, hy = y - s * .8;
+      const t = (p.name || '') + (p.dead ? ' ✝' : '') + (off ? tr(' (нет связи)') : '') + (p.role === 'admin' ? ' ★' : ''); const w = c.measureText(t).width + 8, hy = y - s * .8;
       c.fillStyle = 'rgba(15,18,22,.7)'; c.fillRect(x - w / 2, hy - s * .4 - 2, w, s * .4 + 4); c.fillStyle = p.color; c.fillText(t, x, hy + 1);
     });
   }
-  private drawPlayer(g: Game, x: number, y: number, s: number, c: CanvasRenderingContext2D = this.ctx, pl: { walking: boolean; facing: number; shootCd: number; aim?: number | null } = g.player, color = g.mpv?.peers[g.mpv.mp?.me ?? 0]?.color || '#d2782e') { const bob = pl.walking ? Math.sin(g.tick * .4) * s * .03 : 0;
-    c.fillStyle = 'rgba(0,0,0,.3)'; c.beginPath(); c.ellipse(x + s * .05, y + s * .25, s * .28, s * .13, 0, 0, 7); c.fill();
-    c.fillStyle = color; c.beginPath(); c.roundRect(x - s * .22, y - s * .45 + bob, s * .44, s * .6, s * .15); c.fill();
-    c.strokeStyle = 'rgba(0,0,0,.6)'; c.lineWidth = 1.5; c.stroke();
-    c.fillStyle = '#e9e2d0'; c.beginPath(); c.arc(x, y - s * .55 + bob, s * .18, 0, 7); c.fill(); c.stroke();
-    const fx = [0, .1, 0, -.1][pl.facing], fy = [-.05, 0, .05, 0][pl.facing];
-    c.fillStyle = '#3aa0d8'; c.beginPath(); c.ellipse(x + fx * s, y - s * .55 + bob + fy * s, s * .11, s * .07, 0, 0, 7); c.fill();
-    c.fillStyle = '#6b6f73'; c.fillRect(x - s * .3, y - s * .35 + bob, s * .1, s * .35);
-    if (pl.shootCd > 0 && pl.aim != null) { c.save(); c.translate(x, y - s * .3); c.rotate(pl.aim); c.fillStyle = '#3a3d40'; c.fillRect(0, -s * .04, s * .42, s * .08); c.fillStyle = 'rgba(255,220,120,.9)'; c.beginPath(); c.arc(s * .48, 0, s * .08, 0, 7); c.fill(); c.restore(); }
+  /** v1.14: облик игрока — броня и оружие в руках (своё — из набора, чужое — из снимка) */
+  private heroLook(g: Game, pl: any, color: string, walkQ?: number): HeroLook {
+    let gun: string | null = pl.gun ?? null, armor: string | null = pl.arm ?? null;
+    if (pl.kit) { const j = curGun(pl.kit); gun = j >= 0 && !pl.kit.hid ? pl.kit.guns[j] : null; armor = pl.kit.armor || null; }
+    const walk = pl.walking ? (walkQ ?? ((g.tick * .4 / (Math.PI * 2)) % 1)) : 0;
+    return { color, facing: pl.facing, walk, aim: pl.shootCd > 0 ? pl.aim : null, gun, armor, shooting: pl.shootCd > 0 };
+  }
+  private drawPlayer(g: Game, x: number, y: number, s: number, c: CanvasRenderingContext2D = this.ctx, pl: any = g.player, color = g.mpv?.peers[g.mpv.mp?.me ?? 0]?.color || '#d2782e', look?: HeroLook) {
+    drawHero(c, x, y, s, look || this.heroLook(g, pl, color));
   }
   // мини-карта
   /** Картинка мира для карточки сохранения (JPEG data URL). Вызывать сразу после draw() в том же кадре —
@@ -867,30 +1337,67 @@ export class Renderer {
       c.fillStyle = '#ffd54a'; c.strokeStyle = '#000'; c.lineWidth = 1.5 * dpr;
       c.beginPath(); c.moveTo(px, py); c.lineTo(px, py - r * 3); c.stroke();
       c.beginPath(); c.moveTo(px, py - r * 3); c.lineTo(px + r * 2, py - r * 2.4); c.lineTo(px, py - r * 1.8); c.closePath(); c.fill(); c.stroke();
-      c.font = `${Math.round(12 * dpr)}px system-ui,sans-serif`; const t = n.title; const tw = c.measureText(t).width;
-      c.fillStyle = 'rgba(0,0,0,.7)'; c.fillRect(px + r * 2.4, py - r * 3 - 2, tw + 8, 16 * dpr); c.fillStyle = '#ffe9a0'; c.fillText(t, px + r * 2.4 + 4, py - r * 3 + 13 * dpr);
+      const ic = n.icon && ITEMS[n.icon] ? Math.max(12 * dpr, Math.min(22 * dpr, s * .5)) : 0;
+      if (ic) { c.fillStyle = 'rgba(0,0,0,.7)'; c.fillRect(px + r * 2.4, py - r * 3 - 2, ic + 4, 16 * dpr); c.drawImage(itemIcon(n.icon!), px + r * 2.4 + 2, py - r * 3 - 1, ic, ic); }
+      c.font = `${Math.round(12 * dpr)}px system-ui,sans-serif`; const t = n.title; const tx = px + r * 2.4 + (ic ? ic + 8 : 4), tw = c.measureText(t).width;
+      c.fillStyle = 'rgba(0,0,0,.7)'; c.fillRect(tx - 4, py - r * 3 - 2, tw + 8, 16 * dpr); c.fillStyle = '#ffe9a0'; c.fillText(t, tx, py - r * 3 + 13 * dpr);
       if (s >= 24 && n.text) { c.font = `${Math.round(11 * dpr)}px system-ui,sans-serif`; const L = n.text.split('\n').slice(0, 6); const w = Math.max(...L.map(l => c.measureText(l).width)) + 10;
         c.fillStyle = 'rgba(10,12,14,.82)'; c.fillRect(px + r * 2.4, py - r * 3 + 16 * dpr, w, (L.length * 14 + 6) * dpr); c.fillStyle = '#dfe6ea'; L.forEach((l, i) => c.fillText(l, px + r * 2.4 + 5, py - r * 3 + (16 + 17 + i * 14) * dpr)); }
     }
     c.restore();
   }
+  /** v1.11: карта — местность выборкой по пикселям, постройки прямоугольниками прямо в буфер (конвейеры и трубы не пропадают
+   *  при отдалении), загрязнение — плавно (билинейно между центрами чанков) и шкалой как у слоя U */
   drawMap(g: Game, cv: HTMLCanvasElement, cx: number, cy: number, tilesPerPx: number, pollution = false) {
     const W = cv.width, H = cv.height; const x = cv.getContext('2d')!; const img = x.createImageData(W, H); const d = img.data;
     const col = TERRAIN_COL.map(h => { const n = parseInt(h.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; });
     const resCol = RES_ITEMS.map(r => r ? (() => { const n = parseInt(ITEMS[r].color.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; })() : [0, 0, 0]);
+    const x0 = cx - W / 2 * tilesPerPx, y0 = cy - H / 2 * tilesPerPx;
+    let lastK = NaN, ch: any = null;
     for (let py = 0; py < H; py++) for (let px = 0; px < W; px++) {
-      const wx = Math.floor(cx + (px - W / 2) * tilesPerPx), wy = Math.floor(cy + (py - H / 2) * tilesPerPx); const o = (py * W + px) * 4;
-      if (!g.world.hasChunk(Math.floor(wx / CHUNK), Math.floor(wy / CHUNK))) { d[o] = 8; d[o + 1] = 10; d[o + 2] = 14; d[o + 3] = 255; continue; }
-      const ch = g.world.getChunk(Math.floor(wx / CHUNK), Math.floor(wy / CHUNK)); const i = g.world.idx(wx, wy);
+      const wx = Math.floor(x0 + px * tilesPerPx), wy = Math.floor(y0 + py * tilesPerPx); const o = (py * W + px) * 4;
+      const ccx = Math.floor(wx / CHUNK), ccy = Math.floor(wy / CHUNK); const k = ccx * 100003 + ccy;
+      if (k !== lastK) { lastK = k; ch = g.world.hasChunk(ccx, ccy) ? g.world.getChunk(ccx, ccy) : null; }
+      if (!ch) { d[o] = 8; d[o + 1] = 10; d[o + 2] = 14; d[o + 3] = 255; continue; }
+      const i = g.world.idx(wx, wy);
       let c = col[ch.terrain[i]];
-      if (ch.occ[i] >= 0) { const e = g.ents.get(ch.occ[i]); if (e) { if (e.t === 'nest') c = [220, 40, 90]; else { const n = parseInt(PROTOS[e.proto].color.slice(1), 16); c = [n >> 16, (n >> 8) & 255, n & 255]; } } }
-      else if (ch.amt[i] > 0 && ch.res[i]) c = resCol[ch.res[i]];
+      if (ch.amt[i] > 0 && ch.res[i]) c = resCol[ch.res[i]];
       else if (ch.decor[i] === D_TREE) c = [40, 72, 32];
-      if (pollution && ch.pollution > 0.05) { const k = Math.min(0.6, Math.log10(1 + ch.pollution) * 0.2); c = [c[0] + (200 - c[0]) * k, c[1] * (1 - k), c[2] * (1 - k)]; }
+      if (ch.creep && ch.creep[i]) { d[o] = c[0] * .5 + 50; d[o + 1] = c[1] * .5 + 14; d[o + 2] = c[2] * .5 + 52; d[o + 3] = 255; continue; } // v1.14: слизь Роя
       d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255;
+    }
+    // постройки: прямоугольник не меньше 1 пикселя
+    const x1 = x0 + W * tilesPerPx, y1 = y0 + H * tilesPerPx; const pc = new Map<string, number[]>();
+    for (const e of g.ents.values()) {
+      if (e.x + e.w < x0 || e.y + e.h < y0 || e.x > x1 || e.y > y1) continue;
+      let c = pc.get(e.proto); if (!c) { const pr = PROTOS[e.proto]; const n = e.t === 'nest' ? 0xdc285a : parseInt((pr?.color || '#888888').slice(1), 16); c = [n >> 16, (n >> 8) & 255, n & 255]; pc.set(e.proto, c); }
+      const ax = Math.floor((e.x - x0) / tilesPerPx), ay = Math.floor((e.y - y0) / tilesPerPx);
+      const bx = Math.max(ax + 1, Math.floor((e.x + e.w - x0) / tilesPerPx)), by = Math.max(ay + 1, Math.floor((e.y + e.h - y0) / tilesPerPx));
+      for (let py = Math.max(0, ay); py < Math.min(H, by); py++) for (let px = Math.max(0, ax); px < Math.min(W, bx); px++) { const o = (py * W + px) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; }
+    }
+    if (pollution) {
+      // значение в центре каждого чанка, между центрами — билинейно
+      const pv = (ccx: number, ccy: number) => { const c = g.world.chunks.get(ckey(ccx, ccy)); return c ? c.pollution : 0; };
+      const pc0 = Math.floor(x0 / CHUNK - 0.5) - 1, pr0 = Math.floor(y0 / CHUNK - 0.5) - 1, pcw = Math.ceil(W * tilesPerPx / CHUNK) + 3, prh = Math.ceil(H * tilesPerPx / CHUNK) + 3;
+      const grid = new Float32Array(pcw * prh); for (let r = 0; r < prh; r++) for (let q = 0; q < pcw; q++) grid[r * pcw + q] = pv(pc0 + q, pr0 + r);
+      for (let py = 0; py < H; py++) { const fy = (y0 + (py + 0.5) * tilesPerPx) / CHUNK - 0.5 - pr0; const r = Math.floor(fy), ty = fy - r;
+        for (let px = 0; px < W; px++) { const fx = (x0 + (px + 0.5) * tilesPerPx) / CHUNK - 0.5 - pc0; const q = Math.floor(fx), tx = fx - q;
+          if (q < 0 || r < 0 || q + 1 >= pcw || r + 1 >= prh) continue;
+          const v = (grid[r * pcw + q] * (1 - tx) + grid[r * pcw + q + 1] * tx) * (1 - ty) + (grid[(r + 1) * pcw + q] * (1 - tx) + grid[(r + 1) * pcw + q + 1] * tx) * ty;
+          if (v <= 0.05) continue; const kk = Math.min(0.7, Math.log10(1 + v) * 0.22); const o = (py * W + px) * 4;
+          d[o] = d[o] + (190 - d[o]) * kk; d[o + 1] = d[o + 1] * (1 - kk) + 40 * kk; d[o + 2] = d[o + 2] + (150 - d[o + 2]) * kk; } }
     }
     x.putImageData(img, 0, 0);
     const mx = (wx: number) => W / 2 + (wx - cx) / tilesPerPx, my = (wy: number) => H / 2 + (wy - cy) / tilesPerPx;
+    // Remains stay visible on the map without scanning each body or revealing unexplored chunks.
+    for (const bio of bioCorpseRenderGroups(g, x0, y0, x1, y1)) {
+      if (!g.world.hasChunk(Math.floor(bio.x / CHUNK), Math.floor(bio.y / CHUNK))) continue;
+      paintBioRemains(x, mx(bio.x), my(bio.y), Math.max(3, 6 / Math.max(1, tilesPerPx)), bio.kind, bio.count, true);
+      bioBadge(x, mx(bio.x), my(bio.y), Math.max(12, 18 / Math.max(1, tilesPerPx)), bio.count);
+    }
+    // v1.16: заражение и аварийные реакторы на карте (значки видны и при далёком масштабе)
+    for (const z of g.nuc.zones) { const left = z.dur - (g.tick - z.t); if (left <= 0) continue; const px = mx(z.x), py = my(z.y), R = Math.max(3, z.r / tilesPerPx); if (px + R < 0 || py + R < 0 || px - R > W || py - R > H) continue; x.save(); x.fillStyle = `rgba(200,235,40,${0.12 + 0.25 * left / z.dur})`; x.strokeStyle = 'rgba(230,240,60,.9)'; x.lineWidth = 1.5; x.setLineDash([4, 3]); x.beginPath(); x.arc(px, py, R, 0, Math.PI * 2); x.fill(); x.stroke(); x.restore(); x.fillStyle = '#f2f6a0'; x.font = 'bold 11px sans-serif'; x.textAlign = 'center'; x.fillText('☢', px, py + 4); x.textAlign = 'left'; }
+    for (const e of g.ents.values()) { if (e.t !== 'reactor') continue; const T = heatTemp(e); const px = mx(e.x + 2.5), py = my(e.y + 2.5); if (px < -8 || py < -8 || px > W + 8 || py > H + 8) continue; if (T >= 900) { x.fillStyle = T >= 1000 ? '#ff3a2a' : '#ffd23a'; x.beginPath(); x.moveTo(px, py - 7); x.lineTo(px + 6, py + 5); x.lineTo(px - 6, py + 5); x.closePath(); x.fill(); x.fillStyle = '#000'; x.fillRect(px - 0.8, py - 3, 1.6, 4.5); x.fillRect(px - 0.8, py + 2, 1.6, 1.6); } else if (tilesPerPx >= 2) { x.fillStyle = '#ffe75a'; x.fillRect(px - 2, py - 2, 4, 4); } }
     x.fillStyle = 'rgba(110,180,255,.8)'; for (const gh of g.ghosts.values()) { const gx = mx(gh.x), gy = my(gh.y); if (gx >= 0 && gy >= 0 && gx < W && gy < H) x.fillRect(gx, gy, Math.max(1, gh.w / tilesPerPx), Math.max(1, gh.h / tilesPerPx)); }
     // v1.7: рельсы — линии по клеткам, поезда — точки (локомотив красный)
     if (g.railCells.size) { x.fillStyle = '#9aa1a8'; const step = Math.max(1, Math.floor(tilesPerPx)); for (const k of g.railCells.keys()) { const tx = Math.floor(k / 131072) - 65536, ty = (k % 131072) - 65536; if ((tx | ty) % step) continue; const gx = mx(tx), gy = my(ty); if (gx >= 0 && gy >= 0 && gx < W && gy < H) x.fillRect(gx, gy, 1, 1); } }
@@ -901,13 +1408,27 @@ export class Renderer {
         x.fillStyle = '#c9563a'; x.fillRect(px - 2, py - 2, 4, 4); x.fillStyle = 'rgba(0,0,0,.65)'; const tw = x.measureText(nm).width; x.fillRect(px - tw / 2 - 3, py - 16, tw + 6, 13); x.fillStyle = '#ffe9a0'; x.fillText(nm, px, py - 4); } }
     x.fillStyle = '#ff3a3a'; for (const u of g.units) { const ux = mx(u.x), uy = my(u.y); if (ux >= 0 && uy >= 0 && ux < W && uy < H) x.fillRect(ux - 1, uy - 1, 2, 2); }
     for (const a of g.alerts) if (g.tick - a.tick < 20 * 60 && (g.tick >> 4) % 2) { x.strokeStyle = '#ff3a3a'; x.lineWidth = 2; x.beginPath(); x.arc(mx(a.x), my(a.y), 7, 0, 7); x.stroke(); }
+    // v1.14: атаки Роя — значок «клыки» в точке атаки и стрелка от гнезда; идущие атаки мигают
+    for (const a of g.sw.att) { const age = g.tick - a.t; if (a.end != null && g.tick - a.end > 5 * 3600) continue; const live = a.end == null; const px = mx(a.tx), py = my(a.ty); if (px < -10 || py < -10 || px > W + 10 || py > H + 10) continue;
+      x.globalAlpha = live ? ((g.tick >> 3) % 2 ? 1 : .55) : .5; x.strokeStyle = '#ff5a3a'; x.lineWidth = 1.5; x.setLineDash([3, 3]); x.beginPath(); x.moveTo(mx(a.x), my(a.y)); x.lineTo(px, py); x.stroke(); x.setLineDash([]);
+      x.fillStyle = a.q ? '#c040ff' : live ? '#e8302a' : '#7a3a34'; x.beginPath(); x.moveTo(px, py - 7); x.lineTo(px + 6, py + 4); x.lineTo(px - 6, py + 4); x.closePath(); x.fill(); x.strokeStyle = '#000'; x.lineWidth = 1; x.stroke();
+      x.fillStyle = '#fff'; x.fillRect(px - .5, py - 3, 1.5, 4); x.fillRect(px - .5, py + 2, 1.5, 1.5); x.globalAlpha = 1; void age; }
+    // v1.16: находки радара — уран (зелёный), нефть (чёрный), гнёзда (красный ромб)
+    for (const f of g.x.rs.finds) { if (!g.x.rs.flt[f.k]) continue; const px = mx(f.x), py = my(f.y); if (px < -10 || py < -10 || px > W + 10 || py > H + 10) continue;
+      x.lineWidth = 1.5; x.strokeStyle = '#000';
+      if (f.k === 'nest') { x.fillStyle = '#e8302a'; x.beginPath(); x.moveTo(px, py - 6); x.lineTo(px + 5, py); x.lineTo(px, py + 6); x.lineTo(px - 5, py); x.closePath(); x.fill(); x.stroke(); }
+      else { x.fillStyle = f.k === 'uranium' ? '#6dff4a' : '#2a2a2e'; x.beginPath(); x.arc(px, py, 5, 0, 7); x.fill(); x.stroke(); if (f.k === 'uranium') { x.fillStyle = '#000'; x.fillRect(px - 1, py - 3, 2, 6); } else { x.strokeStyle = '#c8a050'; x.beginPath(); x.arc(px, py, 2, 0, 7); x.stroke(); } } }
     for (const cp of g.corpses) { x.fillStyle = '#ffcc66'; x.fillRect(mx(cp.x) - 2, my(cp.y) - 2, 4, 4); }
     // v1.9: заметки — жёлтые флажки с заголовком
-    if (g.notes.length) { x.font = '11px system-ui,sans-serif'; x.textAlign = 'left'; x.textBaseline = 'middle'; for (const n of g.notes) { const px = mx(n.x), py = my(n.y); if (px < -40 || py < -10 || px > W + 40 || py > H + 10) continue; x.fillStyle = '#ffd54a'; x.fillRect(px - 2, py - 2, 5, 5); if (W > 300) { x.fillStyle = 'rgba(0,0,0,.6)'; const tw = x.measureText(n.title).width; x.fillRect(px + 5, py - 7, tw + 6, 13); x.fillStyle = '#ffe9a0'; x.fillText(n.title, px + 8, py); } } }
+    if (g.notes.length) { x.font = '11px system-ui,sans-serif'; x.textAlign = 'left'; x.textBaseline = 'middle'; for (const n of g.notes) { const px = mx(n.x), py = my(n.y); if (px < -40 || py < -10 || px > W + 40 || py > H + 10) continue; x.fillStyle = '#ffd54a'; x.fillRect(px - 2, py - 2, 5, 5); const icon = validNoteIcon(n.icon) ? 16 : 0; if (icon) { x.fillStyle = 'rgba(0,0,0,.72)'; x.fillRect(px + 5, py - 9, icon + 3, 18); x.drawImage(itemIcon(n.icon!), px + 6, py - 8, icon, icon); } if (W > 300) { x.fillStyle = 'rgba(0,0,0,.6)'; const tx = px + 5 + (icon ? icon + 5 : 0), tw = x.measureText(n.title).width; x.fillRect(tx - 3, py - 7, tw + 6, 13); x.fillStyle = '#ffe9a0'; x.fillText(n.title, tx, py); } } }
     // v1.12: другие игроки — точки их цвета, метки — кольца
     const mv = g.mpv; if (mv) { const me = mv.mp?.me ?? 0;
-      mv.peers.forEach((p, i) => { if (i === me || p.dead) return; x.fillStyle = p.color; x.fillRect(mx(p.x) - 2.5, my(p.y) - 2.5, 5, 5); x.strokeStyle = '#000'; x.lineWidth = 1; x.strokeRect(mx(p.x) - 2.5, my(p.y) - 2.5, 5, 5); });
+      mv.peers.forEach((p, i) => { if (i === me || p.dead || p.off === 2) return; x.fillStyle = p.color; x.fillRect(mx(p.x) - 2.5, my(p.y) - 2.5, 5, 5); x.strokeStyle = '#000'; x.lineWidth = 1; x.strokeRect(mx(p.x) - 2.5, my(p.y) - 2.5, 5, 5); });
       for (const m of g.marks) if (g.tick - m.tick < 3600) { x.strokeStyle = mv.peers[m.pl]?.color || '#fc3'; x.lineWidth = 2; x.beginPath(); x.arc(mx(m.x), my(m.y), 5, 0, 7); x.stroke(); } }
+    // v1.16: «День/Ночь» и время до следующего перехода — из тика игры, одинаково у всех клиентов и после загрузки
+    { const dt = dayInfo(g.tick); const lab = `${tr(dt.name)} · ${tr(dt.next)} ${Math.floor(dt.left / 60)}:${String(Math.floor(dt.left % 60)).padStart(2, '0')}`;
+      x.font = '11px system-ui,sans-serif'; x.textAlign = 'left'; x.textBaseline = 'alphabetic'; const tw = x.measureText(lab).width;
+      x.fillStyle = 'rgba(0,0,0,.6)'; x.fillRect(3, H - 17, tw + 10, 14); x.fillStyle = dt.name === 'Ночь' ? '#9ab8ff' : dt.name === 'День' ? '#ffe28a' : '#ffb27a'; x.fillText(lab, 8, H - 6); }
     x.fillStyle = '#fff'; x.fillRect(W / 2 + (g.player.x - cx) / tilesPerPx - 2, H / 2 + (g.player.y - cy) / tilesPerPx - 2, 4, 4);
   }
 }

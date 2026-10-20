@@ -6,6 +6,7 @@ import { graph, Train } from '../src/sim/trains';
 import { stateHash } from '../src/sim/save';
 import { refNet, ok, fails } from './railkit';
 import { Game } from '../src/sim/game';
+import { addLocoFuel, locoFuelInventory } from '../src/sim/trainfuel';
 
 const HOURS = +(process.env.RAILNET_HOURS || 10);
 const t0 = Date.now(); const { g, trains, sigN } = refNet();
@@ -23,7 +24,7 @@ for (let i = 1; i <= TICKS; i++) {
     for (const [rid, tid] of g.rocc) { const cs = g.rg.conf.get(rid); if (cs) for (const c of cs) { const o = g.rocc.get(c); if (o != null && o !== tid) { collisions++; if (collisions < 4) console.log(`  столкновение: рельсы ${rid}/${c}, поезда ${tid}/${o}, тик ${g.tick}`); } } }
     for (let k = 0; k < trains.length; k++) { const t = trains[k], p = `${t.si}|${t.laps || 0}`; if (p !== prog[k]) { prog[k] = p; last[k] = i; } else { maxStall = Math.max(maxStall, i - last[k]); if (i - last[k] > DEAD) { deadlocks++; last[k] = i; console.log(`  тупик: поезд ${t.id} (${t.st}) без движения по расписанию 20 мин, тик ${g.tick}`); } } }
     if (i % 600 === 0 && trains.some(t => t.st === 'signal')) sigWait++;
-    if (i % 600 === 0) for (const t of trains) for (const id of t.cars) { const e = g.ents.get(id)!; if (e.t === 'loco' && (!e.fuel || e.fuel.count < 10)) e.fuel = { item: 'coal', count: 50 }; } // заправка (в игре — манипулятор на станции)
+    if (i % 600 === 0) for (const t of trains) for (const id of t.cars) { const e = g.ents.get(id)!; if (e.t === 'loco') { const have = locoFuelInventory(e)!.count('coal'); if (have < 10) addLocoFuel(e, 'coal', 50 - have); } } // заправка (в игре — манипулятор на станции)
   }
   if (i % (3600 * 60) === 0) console.log(`  ${i / 216000} ч: кругов ${trains.reduce((s, t) => s + (t.laps || 0), 0)}, ${(Date.now() - t1) / 1000 | 0} с`);
 }

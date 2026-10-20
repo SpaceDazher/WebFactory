@@ -29,6 +29,7 @@ const ORE_STYLE: Record<string, { col: string; vein?: string; gloss: number }> =
   'copper-ore': { col: '#b0603a', vein: '#5fbf9a', gloss: 0.3 },
   'coal': { col: '#2a2a2e', vein: '#55585e', gloss: 0.55 },
   'stone': { col: '#a8987c', gloss: 0.25 },
+  'uranium-ore': { col: '#7ab83a', vein: '#b6e873', gloss: 0.35 },
 };
 const oreCache = new Map<string, HTMLCanvasElement[]>();
 /** 4 уровня богатства × 4 варианта */

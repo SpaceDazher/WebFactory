@@ -8,8 +8,9 @@ import { PROTOS } from '../data/entities';
 import { RECIPES } from '../data/recipes';
 import { TECHS } from '../data/techs';
 import { roboSignals } from './robots';
+import { heatTemp } from './heat';
 
-export const WIRE_REACH = 9;
+export const WIRE_REACH = 30;
 /** цвет провода по предмету: 0 — красный, 1 — зелёный */
 export const WIRE_OF: Record<string, 0 | 1> = { 'red-wire': 0, 'green-wire': 1 };
 export const WIRE_ITEM = ['red-wire', 'green-wire'] as const;
@@ -89,12 +90,12 @@ const norm = (a: number, b: number, c: 0 | 1, ta: 0 | 1, tb: 0 | 1): CWire => {
 };
 const same = (w: CWire, x: CWire) => w[0] === x[0] && w[1] === x[1] && w[2] === x[2] && wt(w, 0) === wt(x, 0) && wt(w, 1) === wt(x, 1);
 
-const CAP_T = new Set(['belt', 'inserter', 'chest', 'tank', 'pump', 'drill', 'pumpjack', 'lamp', 'combinator', 'pole', 'arith', 'decider', 'roboport', 'lab', 'assembler', 'stop', 'tpump']);
-const COND_T = new Set(['belt', 'inserter', 'pump', 'drill', 'pumpjack', 'lamp', 'stop', 'tpump']);
+const CAP_T = new Set(['belt', 'inserter', 'chest', 'tank', 'pump', 'drill', 'pumpjack', 'lamp', 'combinator', 'pole', 'arith', 'decider', 'roboport', 'lab', 'assembler', 'stop', 'tpump', 'reactor', 'radar']);
+const COND_T = new Set(['belt', 'inserter', 'pump', 'drill', 'pumpjack', 'lamp', 'stop', 'tpump', 'reactor']);
 export const circuitCapable = (e: Entity | null | undefined) => !!e && CAP_T.has(e.t);
 export const condCapable = (e: Entity | null | undefined) => !!e && COND_T.has(e.t);
 /** чтение: конвейер (прочитать/держать), манипулятор (рука); v1.6: опора, робопорт, лаборатория, сборщик; сундук и цистерна сообщают содержимое всегда */
-export const readCapable = (e: Entity) => e.t === 'belt' || e.t === 'inserter' || e.t === 'pole' || e.t === 'roboport' || e.t === 'lab' || e.t === 'assembler';
+export const readCapable = (e: Entity) => e.t === 'belt' || e.t === 'inserter' || e.t === 'pole' || e.t === 'roboport' || e.t === 'lab' || e.t === 'assembler' || e.t === 'radar';
 export const wireDist = (a: Entity, b: Entity) => Math.hypot(a.x + a.w / 2 - (b.x + b.w / 2), a.y + a.h / 2 - (b.y + b.h / 2));
 /** все сигналы для выбора: предметы, жидкости, виртуальные (без особых «каждый/любой/все») */
 export const signalList = () => Object.keys(ITEMS).filter(k => !ITEMS[k].hidden && !ITEMS[k].meta);
@@ -161,7 +162,8 @@ function output(g: Game, e: Entity, m: Map<string, number>) {
     case 'pole': if (e.cc?.rd === 1 && e._net != null && e._net >= 0) { const n = g.powerNets.get(e._net); if (n) { add(m, 'signal-power', Math.floor(n.satisfaction * 100 + 1e-9)); if (n.storeCap) add(m, 'signal-accu', Math.floor((n.stored || 0) / n.storeCap * 100 + 1e-9)); } } break;
     case 'roboport': if (e.cc?.rd) { const r = roboSignals(g, e); if (r) { if (e.cc.rd & 1) for (const [k, v] of r.items) add(m, k, v); if (e.cc.rd & 2) { add(m, 'signal-lrobot', r.lf); add(m, 'signal-lrobot-all', r.la); add(m, 'signal-crobot', r.cf); add(m, 'signal-crobot-all', r.ca); } } } break;
     case 'lab': if (e.cc?.rd === 1 && g.research.current) { const t = TECHS[g.research.current]; for (const pk of t.packs) add(m, pk, 1); add(m, 'signal-research', Math.floor(g.research.progress / g.techCost(g.research.current) * 100)); } break;
-    case 'assembler': if (e.cc?.rd === 1) { if (e.recipe && RECIPES[e.recipe]) add(m, RECIPES[e.recipe].out[0][0], 1); if (e.status === 'working' || e.status === 'low-power') add(m, 'signal-work', 1); } break;
+    case 'assembler': if (e.cc?.rd === 1) { const out = e.recipe ? RECIPES[e.recipe]?.out[0]?.[0] : null; if (out) add(m, out, 1); if (e.status === 'working' || e.status === 'low-power') add(m, 'signal-work', 1); } break;
+    case 'radar': if (e.cc?.rd === 1 && e.status === 'working') { const r = g.v117.speakers.radar[String(e.id)]; if (r?.enabled) { add(m, 'signal-enemy-count', r.count); add(m, 'signal-attack-active', r.attacking || r.attackedUntil > g.tick ? 1 : 0); } } break;
     case 'stop': if (e.cc?.rd) {
       if (e.cc.rd & 1) { const t = g.trains.find(o => o.st === 'wait' && o.tgt === e.id); if (t) for (const id of t.cars) { const c = g.ents.get(id); if (!c) continue;
         if (c.inv) for (const s of c.inv.slots) if (s) add(m, s.item, s.count);
@@ -169,7 +171,12 @@ function output(g: Game, e: Entity, m: Map<string, number>) {
       if (e.cc.rd & 2) { let n = 0; for (const o of g.trains) if (!o.manual && o.tgt === e.id) n++; add(m, 'signal-C', n); }
     } break;
     case 'chest': if (e.inv) for (const s of e.inv.slots) if (s) add(m, s.item, s.count); break;
-    case 'tank': if (e._fn && e._fn[0] != null) { const n = g.fluidNets[e._fn[0]]; const box = PROTOS[e.proto].fluid![0]; if (n && n.fluid && n.cap > 0) add(m, n.fluid, Math.floor(n.amount * box.cap / n.cap + 1e-6)); } break;
+    case 'tank': if (e._fn && e._fn[0] != null) { const n = g.fluidNets[e._fn[0]]; const box = PROTOS[e.proto].fluid![0]; if (n && n.fluid && n.cap > 0) { const a = Math.floor(n.amount * box.cap / n.cap + 1e-6); add(m, n.fluid, a);
+      // v1.16: пар — ещё температура (°C) и запас полезной энергии (МДж): ед. × кДж/ед
+      if (n.fluid === 'steam' && a > 0) { add(m, 'signal-temperature', n.se >= 97 ? 500 : 165); add(m, 'signal-energy', Math.floor(n.amount * box.cap / n.cap * n.se / 1000 + 1e-6)); } } } break;
+    // v1.16: реактор — температура, мощность, соседи, время стержня, перегрев, число стержней и отходов (стержень в горении во входной слот не входит)
+    case 'reactor': { add(m, 'signal-temperature', Math.round(heatTemp(e))); add(m, 'signal-heat', Math.round((e._mw || 0) * 1000)); add(m, 'signal-neighbours', e.rn || 0); add(m, 'signal-fuel-time', Math.ceil((e.rt || 0) / 60)); add(m, 'signal-overheat', heatTemp(e) >= 1000 ? 1 : 0);
+      add(m, 'nuclear-fuel-cell', e.input?.['nuclear-fuel-cell'] || 0); add(m, 'used-nuclear-fuel-cell', e.output?.['used-nuclear-fuel-cell'] || 0); break; }
     case 'inserter': if (e.cc?.rd === 1 && e.hand) add(m, e.hand, e.hn || 1); break;
     case 'belt':
       if (e.cc?.rd === 2) { for (const seg of e.lanes!) for (const L of seg) for (const it of L) add(m, it.item, it.n || 1); }
@@ -306,7 +313,7 @@ export function combOut(g: Game, e: Entity): Record<string, number> | undefined 
 function recipeBySignal(g: Game, e: Entity) {
   if (!e._cn) { if (e.recipe) g.setRecipeSig(e, null); return; } let best: string | null = null, bv = 0; const cats = PROTOS[e.proto].cats || ['crafting'];
   for (const c of [0, 1]) { const id = e._cn[c]; if (id < 0) continue; for (const [k] of g.cnets[id].sig) {
-    const v = sigValue(g, e, k); if (v <= 0 || !RECIPES[k] || !g.enabled.has(k) || !cats.includes(RECIPES[k].cat)) continue;
+    const v = sigValue(g, e, k); if (v <= 0 || !RECIPES[k] || !g.recipeAvailable(k) || !cats.includes(RECIPES[k].cat)) continue;
     if (v > bv || v === bv && best !== null && k < best) { best = k; bv = v; } } }
   if (best !== e.recipe) g.setRecipeSig(e, best);
 }
@@ -318,7 +325,7 @@ export function cleanCC(e: { t: string }, o: any): CC | undefined {
   const r: CC = {}; const okSig = (s: any) => typeof s === 'string' && !!ITEMS[s] && !ITEMS[s].meta;
   const num = (v: any) => Number.isFinite(+v) ? Math.max(-2147483648, Math.min(2147483647, Math.trunc(+v))) : 0;
   if (o.en && COND_T.has(e.t)) r.en = { a: okSig(o.en.a) ? o.en.a : null, op: OPS.includes(o.en.op) ? o.en.op : '<', n: num(o.en.n), ...(okSig(o.en.b) ? { b: o.en.b } : {}) };
-  if ((e.t === 'belt' && [1, 2].includes(o.rd)) || ((e.t === 'inserter' || e.t === 'pole' || e.t === 'lab' || e.t === 'assembler') && o.rd === 1) || ((e.t === 'roboport' || e.t === 'stop') && [1, 2, 3].includes(o.rd))) r.rd = o.rd;
+  if ((e.t === 'belt' && [1, 2].includes(o.rd)) || ((e.t === 'inserter' || e.t === 'pole' || e.t === 'lab' || e.t === 'assembler' || e.t === 'radar') && o.rd === 1) || ((e.t === 'roboport' || e.t === 'stop') && [1, 2, 3].includes(o.rd))) r.rd = o.rd;
   if (e.t === 'stop' && o.lim) r.lim = true;
   if (e.t === 'lamp' && o.col) r.col = true;
   if (e.t === 'assembler' && o.setr) r.setr = true;

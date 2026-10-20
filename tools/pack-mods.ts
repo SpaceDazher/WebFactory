@@ -16,6 +16,6 @@ for (const d of dirs) {
   list.push({ name: p.info.name, title: p.info.title, version: p.info.version, hash: p.hash, enabled: true });
   console.log(`${d}.zip — ${p.info.title} ${p.info.version}, файлов ${Object.keys(files).length}, отпечаток ${p.hash}`);
 }
-pack['modpack.json'] = new TextEncoder().encode(JSON.stringify({ format: 1, game: '1.10.0', order: list.map(m => m.name), mods: list }, null, 1));
+pack['modpack.json'] = new TextEncoder().encode(JSON.stringify({ format: 1, game: '1.11.0', order: list.map(m => m.name), mods: list }, null, 1));
 fs.writeFileSync(path.join(out, 'examples-modpack.zip'), await zip(pack, nodeDeflate));
 console.log('examples-modpack.zip — все примеры одним пакетом');

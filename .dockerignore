@@ -1,0 +1,11 @@
+**/node_modules
+.git
+dist
+artifacts
+*.zip
+*.tgz
+*.log
+**/.env
+**/.env.*
+!**/.env.example
+native/relay-public/downloads

@@ -78,7 +78,12 @@ export function walkable(g: Game, x: number, y: number, allowDecor = false) {
 class Heap { a: [number, number][] = [];
   push(f: number, v: number) { const a = this.a; a.push([f, v]); let i = a.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (a[p][0] <= a[i][0]) break; [a[p], a[i]] = [a[i], a[p]]; i = p; } }
   pop() { const a = this.a; const top = a[0]; const last = a.pop()!; if (a.length) { a[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < a.length && a[l][0] < a[m][0]) m = l; if (r < a.length && a[r][0] < a[m][0]) m = r; if (m === i) break; [a[m], a[i]] = [a[i], a[m]]; i = m; } } return top; }
-  get size() { return this.a.length; } }
+  get size() { return this.a.length; }
+  reprioritize(priority: (value: number) => number) {
+    const entries = this.a; this.a = [];
+    for (const [, value] of entries) this.push(priority(value), value);
+  }
+}
 /** A* по клеткам от (sx,sy) до клетки с goal(x,y). allowDecor — деревья и скалы проходимы (их вырубают по пути). */
 export function findPath(g: Game, sx: number, sy: number, goal: (x: number, y: number) => boolean, hx: number, hy: number, o: { allowDecor?: boolean; limit?: number } = {}): [number, number][] | null {
   const came = new Map<number, number>(); const gs = new Map<number, number>(); const H = new Heap(); const xy = new Map<number, [number, number]>();
@@ -118,17 +123,30 @@ export function pipeOk(pl: Plan, x: number, y: number, net: string): boolean {
   return true;
 }
 export interface Route { ents: PEnt[]; }
+export interface RouteSearchStats { visited: number; generated: number; reason: 'empty-targets' | 'blocked-start' | 'found' | 'limit' | 'exhausted'; tightened?: boolean; }
 /**
  * Трасса сети net от клетки (sx,sy) (обычно — перед портом) до любой клетки из targets (клетки с трубой этой сети
  * или перед её портами). Ходы: обычная труба на соседнюю клетку (цена 1) или подземная пара по прямой до 10 клеток,
  * за которой обычная труба (дешевле на длинных участках и оставляет проход).
  */
-export function routePipe(pl: Plan, net: string, sx: number, sy: number, targets: Set<number>, o: { maxNodes?: number } = {}): Route | null {
-  if (!targets.size) return null;
-  if (targets.has(key(sx, sy))) return { ents: pl.tile.get(key(sx, sy))?.net === net ? [] : [{ p: 'pipe', x: sx, y: sy, d: 0 }] };
-  if (!pipeOk(pl, sx, sy, net)) return null;
+export function routePipe(pl: Plan, net: string, sx: number, sy: number, targets: Set<number>, o: { maxNodes?: number; stats?: RouteSearchStats } = {}): Route | null {
+  let tightened = false;
+  const finish = (reason: RouteSearchStats['reason'], route: Route | null, visited = 0, generated = 0) => {
+    if (o.stats) Object.assign(o.stats, { reason, visited, generated, tightened });
+    return route;
+  };
+  if (!targets.size) return finish('empty-targets', null);
+  if (targets.has(key(sx, sy))) return finish('found', { ents: pl.tile.get(key(sx, sy))?.net === net ? [] : [{ p: 'pipe', x: sx, y: sy, d: 0 }] });
+  if (!pipeOk(pl, sx, sy, net)) return finish('blocked-start', null);
   const tl = [...targets].map(unkey);
-  const h = (x: number, y: number) => { let m = Infinity; for (const [a, b] of tl) m = Math.min(m, Math.abs(a - x) + Math.abs(b - y)); return m * 0.4; };
+  // A length-k underground transition advances k+2 cells for 2.6+0.3*k.
+  // Its cheapest cost/cell is at k=10: 5.6/12. Ordinary pipe costs 1.
+  // Keep the established 0.4 ordering for ordinary routes. After one third
+  // of the existing budget, tighten only this search's remaining frontier.
+  // No restart, extra expansions or changes to connection rules are needed.
+  const MIN_COST_PER_CELL = (2.6 + 0.3 * 10) / 12;
+  let costPerCell = 0.4;
+  const h = (x: number, y: number) => { let m = Infinity; for (const [a, b] of tl) m = Math.min(m, Math.abs(a - x) + Math.abs(b - y)); return m * costPerCell; };
   type Node = { x: number; y: number; g: number; prev: number; via: 'p' | 'u' | 's'; d: number; k: number };
   const nodes: Node[] = [{ x: sx, y: sy, g: 0, prev: -1, via: 's', d: 0, k: 0 }];
   const best = new Map<number, number>([[key(sx, sy), 0]]); const H = new Heap(); H.push(h(sx, sy), 0);
@@ -136,6 +154,10 @@ export function routePipe(pl: Plan, net: string, sx: number, sy: number, targets
   const used = (i: number) => { const s = new Set<number>(); for (let j = i; j >= 0; j = nodes[j].prev) { const n = nodes[j]; s.add(key(n.x, n.y)); if (n.via === 'u') { const p = nodes[n.prev]; s.add(key(p.x + DX[n.d], p.y + DY[n.d])); s.add(key(p.x + DX[n.d] * (n.k + 1), p.y + DY[n.d] * (n.k + 1))); } } return s; };
   let iter = 0; const maxN = o.maxNodes ?? 300000;
   while (H.size && iter++ < maxN) {
+    if (!tightened && iter >= Math.max(1, Math.floor(maxN / 3))) {
+      tightened = true; costPerCell = MIN_COST_PER_CELL;
+      H.reprioritize(i => nodes[i].g + h(nodes[i].x, nodes[i].y));
+    }
     const [, i] = H.pop(); const n = nodes[i]; const k0 = key(n.x, n.y);
     if (n.g > (best.get(k0) ?? Infinity)) continue;
     if (targets.has(k0) && n.via !== 's') {
@@ -145,7 +167,7 @@ export function routePipe(pl: Plan, net: string, sx: number, sy: number, targets
         if (pl.tile.get(key(c.x, c.y))?.net !== net) ents.push({ p: 'pipe', x: c.x, y: c.y, d: 0 });
         if (c.via === 'u') { const p0 = nodes[c.prev]; ents.push({ p: 'pipe-to-ground', x: p0.x + DX[c.d], y: p0.y + DY[c.d], d: c.d }, { p: 'pipe-to-ground', x: p0.x + DX[c.d] * (c.k + 1), y: p0.y + DY[c.d] * (c.k + 1), d: (c.d + 2) % 4 }); }
       }
-      return { ents };
+      return finish('found', { ents }, iter, nodes.length);
     }
     const mine = used(i);
     for (let d = 0; d < 4; d++) {
@@ -171,7 +193,7 @@ export function routePipe(pl: Plan, net: string, sx: number, sy: number, targets
       }
     }
   }
-  return null;
+  return finish(H.size ? 'limit' : 'exhausted', null, Math.min(iter, maxN), nodes.length);
 }
 /** Внести трассу в план: трубы с сетью, подземные — и клетки над их тоннелями */
 export function commitRoute(pl: Plan, net: string, r: Route) {

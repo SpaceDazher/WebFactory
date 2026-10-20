@@ -1,11 +1,21 @@
 // Поверхность высокого разрешения: контуры типов почвы строятся «марширующими квадратами»
 // по сглаженному полю, заливаются 2K-текстурами; берег — пена и мокрый песок, вода — анимированные каустики.
-import { CHUNK } from '../core/types';
+import { CHUNK, ckey } from '../core/types';
 import { World, Chunk, T_SAND, T_STONE, T_SHALLOW, T_DEEP } from '../sim/world';
 import { pattern } from './textures';
 
 export interface Layer { fill: Path2D; soft: Path2D; edge: Path2D; any: boolean; }
-export interface ChunkGeo { ver: number; sand: Layer; stone: Layer; water: Layer; deep: Layer; used: number; }
+export interface ChunkGeo { ver: number; terrainKey?: string; landfill?: Path2D; sand: Layer; stone: Layer; water: Layer; deep: Layer; used: number; }
+
+/** Coast smoothing reads a three-cell halo, so loaded neighboring chunks are
+ * part of the geometry cache identity. Looking up versions must not generate land. */
+export function terrainCacheKey(w: World, c: Chunk): string {
+  const versions: (number | string)[] = [];
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+    versions.push(dx === 0 && dy === 0 ? c.version : w.chunks.get(ckey(c.cx + dx, c.cy + dy))?.version ?? '-');
+  }
+  return versions.join(':');
+}
 
 /** сглаженное поле принадлежности (значения в центрах клеток), с полем 2 клетки вокруг чанка */
 function field(w: World, c: Chunk, pred: (t: number) => boolean): Float32Array {
@@ -59,8 +69,13 @@ function layer(w: World, c: Chunk, pred: (t: number) => boolean, thr = 0.5, soft
   return L;
 }
 export function buildGeo(w: World, c: Chunk): ChunkGeo {
+  let landfill: Path2D | undefined;
+  if (c.land?.size) {
+    landfill = new Path2D();
+    for (const i of c.land) if (c.terrain[i] === 0) landfill.rect(i % CHUNK, Math.floor(i / CHUNK), 1, 1);
+  }
   return {
-    ver: c.version, used: 0,
+    ver: c.version, terrainKey: terrainCacheKey(w, c), landfill, used: 0,
     sand: layer(w, c, t => t === T_SAND), stone: layer(w, c, t => t === T_STONE),
     water: layer(w, c, t => t >= T_SHALLOW, 0.5, 0.25), deep: layer(w, c, t => t === T_DEEP, 0.55, 0.3),
   };
@@ -97,6 +112,13 @@ export function drawGeo(c: CanvasRenderingContext2D, g: ChunkGeo, ch: Chunk, s: 
     const foam = 0.32 + (animate ? Math.sin(time * 0.05) * 0.12 : 0);
     c.strokeStyle = `rgba(235,245,250,${foam})`; c.lineWidth = 0.14; c.stroke(g.water.edge);
     c.strokeStyle = `rgba(235,245,250,${foam * 0.4})`; c.lineWidth = 0.4; c.stroke(g.water.edge);
+  }
+  // A single filled cell surrounded by water can remain above the smoothed
+  // water threshold. Its physical, permanent land must stay visibly dry.
+  if (g.landfill) {
+    c.save(); c.clip(g.landfill); c.fillStyle = grass || '#56703a'; c.fillRect(0, 0, CHUNK, CHUNK);
+    if (mac) { c.globalCompositeOperation = 'soft-light'; c.globalAlpha = 0.7; c.fillStyle = mac; c.fillRect(0, 0, CHUNK, CHUNK); }
+    c.restore();
   }
   c.restore();
 }

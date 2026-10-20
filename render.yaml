@@ -1,0 +1,20 @@
+# Free invitation / WSS gateway only. The simulation remains on the owner's PC.
+# Connect this source repository as a Render Blueprint; no paid resources.
+services:
+  - type: web
+    name: zavod7-relay
+    runtime: node
+    plan: free
+    region: frankfurt
+    numInstances: 1
+    autoDeployTrigger: "off"
+    buildCommand: npm ci --include=dev && ZAVOD_INVITE_ORIGIN="$RENDER_EXTERNAL_URL" npm run native:server
+    startCommand: node dist/native/relay-gateway.mjs
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "22.23.2"
+      - key: ZAVOD_RELAY_REGISTRATION
+        value: public
+      - key: ZAVOD_RELAY_TRUST_PROXY
+        value: "0"
