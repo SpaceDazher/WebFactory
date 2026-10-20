@@ -15,7 +15,7 @@ Render выдаёт собственный адрес вида `https://zavod7-r
 
 ## Подключение
 
-1. Создать бесплатный аккаунт Render и подключить [SpaceDazher/WebFactory](https://github.com/SpaceDazher/WebFactory). Проверенная `main` на коммите `7ed7250` содержит 1.10.0 без нового сервера. Текущая 1.17 перенесена в отдельный локальный checkout/ветку `codex/v117-render-free`; её отправка пока не выполнена из-за отсутствия авторизации GitHub. До публикации этой ветки нынешняя `main` для шлюза не подходит.
+1. Создать бесплатный аккаунт Render и подключить [SpaceDazher/WebFactory](https://github.com/SpaceDazher/WebFactory). Проверенная `main` на коммите `7ed7250` содержит 1.10.0 без нового сервера. Текущая 1.17 опубликована в отдельной ветке [codex/v117-render-free](https://github.com/SpaceDazher/WebFactory/tree/codex/v117-render-free); выбрать её. Main не менялась. Это проверенный dev-кандидат, а не принятый финальный релиз.
 2. В Render: **New → Blueprint**, выбрать репозиторий и корневой `render.yaml`. Проверить **Free**, один сервис, без базы данных и диска. Не включать платный план. Источник: [Blueprint](https://render.com/docs/blueprint-spec).
 3. Дождаться сборки и взять фактический HTTPS-адрес сервиса. `RENDER_EXTERNAL_URL` и `PORT` читаются автоматически; явные `ZAVOD_RELAY_PUBLIC_ORIGIN` / `ZAVOD_RELAY_PORT` имеют приоритет. Строгая проверка origin/порта сохранена. `ZAVOD_INVITE_ORIGIN` задаётся на время сборки из выданного URL. Источники: [переменные](https://render.com/docs/environment-variables), [Node](https://render.com/docs/node-version).
 4. На ПК владельца задать для штатного сервера `ZAVOD_RELAY_URL=wss://<фактический-хост>/v1/host` и `ZAVOD_RELAY_PUBLIC_ORIGIN=https://<фактический-хост>`. Для сборок игры/Windows-установщика перед сборкой задать `ZAVOD_INVITE_ORIGIN=https://<фактический-хост>`. Не подставлять пример как существующий адрес.
@@ -28,7 +28,7 @@ Render выдаёт собственный адрес вида `https://zavod7-r
 | Поле | Значение |
 | --- | --- |
 | Repository | SpaceDazher/WebFactory |
-| Branch | codex/v117-render-free после её публикации; либо main после принятия переноса |
+| Branch | codex/v117-render-free; либо main после принятия переноса |
 | Language | Node |
 | Root Directory | пусто |
 | Region | Frankfurt |
@@ -44,4 +44,4 @@ Render выдаёт собственный адрес вида `https://zavod7-r
 
 Настоящий packaged-процесс с `RENDER_EXTERNAL_URL`/`PORT` прошёл TLS/lifecycle-проверку `npm run test:native117 -- --relay --invite-only --render-env` (exit 0). Прежние явные переменные отдельно проверяются с конфликтующими provider-переменными, чтобы сохранять приоритет. Это проверяет точку запуска приложения, а не развёртывание Linux/Render.
 
-Пользователь сообщил существующий репозиторий и создаёт Render сам. Изменения пока не отправлены в GitHub; расходов нет. Публичный URL, сборка в Render и интернет-приёмка пока отсутствуют. Для следующего шага нужна авторизация записи в GitHub и подключение обновлённой ветки в Render; пароли и ключи в чат не передавать.
+Пользователь сообщил существующий репозиторий и создаёт Render сам. Ветка отправлена через штатный Git/Git Credential Manager с явным выбором уже авторизованного SpaceDazher. Пароли и токены не читались и в чат не выводились; main не менялась. Публичный URL, сборка в Render и интернет-приёмка пока отсутствуют. Следующий шаг — выбрать опубликованную ветку в Render и сообщить фактический HTTPS-адрес.
