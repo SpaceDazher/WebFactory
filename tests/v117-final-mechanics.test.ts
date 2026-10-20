@@ -57,9 +57,9 @@ for (const [index, item] of weapons.entries()) {
   assert.deepEqual([spec.cooldown, spec.windup], timing[index]);
   assert.equal(g.inv.add(item, 1), 0); assert.equal(g.inv.add('laser-cell', 1), 0);
   const angles = [0, .03, -.03, .06];
-  for (const angle of angles) { const u = makeUnit(g, 'small', .5 + Math.cos(angle) * .65, .5 + Math.sin(angle) * .65, 'wander'); u.hp = u.mh = 1000; }
-  const behind = makeUnit(g, 'small', -.15, .5, 'wander'); behind.hp = behind.mh = 1000;
-  const distant = makeUnit(g, 'small', .5 + spec.range + .2, .5, 'wander'); distant.hp = distant.mh = 1000;
+  for (const angle of angles) { const u = makeUnit(g, 'small', .5 + Math.cos(angle) * .65, .5 + Math.sin(angle) * .65, 'attack'); u.hp = u.mh = 1000; }
+  const behind = makeUnit(g, 'small', -.15, .5, 'attack'); behind.hp = behind.mh = 1000;
+  const distant = makeUnit(g, 'small', .5 + spec.range + .2, .5, 'attack'); distant.hp = distant.mh = 1000;
   assert.equal(g.units.length, 6); assert.equal(new Set(g.units.map(u => u.id)).size, 6);
   command(g, 'melee', 'equip', { weapon: item });
   const attack = command(g, 'melee', 'attack');

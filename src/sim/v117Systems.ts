@@ -1254,6 +1254,10 @@ function stepFormsIndexed(g: Game) {
       g.v117.genetics.jobs.splice(g.v117.genetics.jobs.indexOf(j), 1);
       continue;
     }
+    // Forms advance before assemblers in Game.step. A newly ready body must
+    // remain reserved until its assembler commits the byproducts, including
+    // when a full output buffer prevents that commit for several ticks.
+    if (!j.outputsDone) { fab.status = 'bio-output-blocked'; continue; }
     if (releaseBioform(g, j.body, fab)) {
       releasedThisTick.add(j.body.id);
       g.v117.genetics.jobs.splice(g.v117.genetics.jobs.indexOf(j), 1);
