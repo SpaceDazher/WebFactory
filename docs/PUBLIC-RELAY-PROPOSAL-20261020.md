@@ -15,7 +15,7 @@ Render выдаёт собственный адрес вида `https://zavod7-r
 
 ## Подключение
 
-1. Создать бесплатный аккаунт Render и подключить репозиторий с этими исходниками (можно приватный, доступ даётся Render). В текущей рабочей папке Git remote не задан; исходники ещё никуда не опубликованы.
+1. Создать бесплатный аккаунт Render и подключить [SpaceDazher/WebFactory](https://github.com/SpaceDazher/WebFactory). Проверенная `main` на коммите `7ed7250` содержит 1.10.0 без нового сервера. Текущая 1.17 перенесена в отдельный локальный checkout/ветку `codex/v117-render-free`; её отправка пока не выполнена из-за отсутствия авторизации GitHub. До публикации этой ветки нынешняя `main` для шлюза не подходит.
 2. В Render: **New → Blueprint**, выбрать репозиторий и корневой `render.yaml`. Проверить **Free**, один сервис, без базы данных и диска. Не включать платный план. Источник: [Blueprint](https://render.com/docs/blueprint-spec).
 3. Дождаться сборки и взять фактический HTTPS-адрес сервиса. `RENDER_EXTERNAL_URL` и `PORT` читаются автоматически; явные `ZAVOD_RELAY_PUBLIC_ORIGIN` / `ZAVOD_RELAY_PORT` имеют приоритет. Строгая проверка origin/порта сохранена. `ZAVOD_INVITE_ORIGIN` задаётся на время сборки из выданного URL. Источники: [переменные](https://render.com/docs/environment-variables), [Node](https://render.com/docs/node-version).
 4. На ПК владельца задать для штатного сервера `ZAVOD_RELAY_URL=wss://<фактический-хост>/v1/host` и `ZAVOD_RELAY_PUBLIC_ORIGIN=https://<фактический-хост>`. Для сборок игры/Windows-установщика перед сборкой задать `ZAVOD_INVITE_ORIGIN=https://<фактический-хост>`. Не подставлять пример как существующий адрес.
@@ -23,8 +23,25 @@ Render выдаёт собственный адрес вида `https://zavod7-r
 
 Старт: `node dist/native/relay-gateway.mjs`; сборка в Linux — команда из Blueprint. Секреты, admin capability, `.env`, сохранения и журналы в репозиторий не отправлять. Регистрация public использует подпись идентичности сервера; общий host-token не нужен. `ZAVOD_RELAY_TRUST_PROXY=0` сохраняет лимиты по адресу сокета, не доверяя неподтверждённым forwarded-заголовкам; на публичном стенде отдельно измерить влияние общих адресов прокси.
 
+При выборе **Web Services → New Web Service** вместо Blueprint те же настройки вводятся вручную:
+
+| Поле | Значение |
+| --- | --- |
+| Repository | SpaceDazher/WebFactory |
+| Branch | codex/v117-render-free после её публикации; либо main после принятия переноса |
+| Language | Node |
+| Root Directory | пусто |
+| Region | Frankfurt |
+| Instance Type | Free |
+| Build Command | `npm ci --include=dev && ZAVOD_INVITE_ORIGIN="$RENDER_EXTERNAL_URL" npm run native:server` |
+| Start Command | `node dist/native/relay-gateway.mjs` |
+| Health Check Path | `/` |
+| Environment | `NODE_VERSION=22.23.2`, `ZAVOD_RELAY_REGISTRATION=public`, `ZAVOD_RELAY_TRUST_PROXY=0` |
+
+Выданные самим Render `RENDER_EXTERNAL_URL` и `PORT` вручную не выдумываются. Для первоначального стенда достаточно собственного onrender.com-адреса, без custom domain и дополнительных сервисов.
+
 ## Что проверено локально
 
 Настоящий packaged-процесс с `RENDER_EXTERNAL_URL`/`PORT` прошёл TLS/lifecycle-проверку `npm run test:native117 -- --relay --invite-only --render-env` (exit 0). Прежние явные переменные отдельно проверяются с конфликтующими provider-переменными, чтобы сохранять приоритет. Это проверяет точку запуска приложения, а не развёртывание Linux/Render.
 
-Аккаунт/репозиторий не созданы, публикации и расходов нет. Публичный URL, сборка в Render и интернет-приёмка пока отсутствуют. Для следующего шага требуется пользовательский аккаунт Render с подключённым репозиторием; пароли и ключи в чат не передавать.
+Пользователь сообщил существующий репозиторий и создаёт Render сам. Изменения пока не отправлены в GitHub; расходов нет. Публичный URL, сборка в Render и интернет-приёмка пока отсутствуют. Для следующего шага нужна авторизация записи в GitHub и подключение обновлённой ветки в Render; пароли и ключи в чат не передавать.
