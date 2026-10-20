@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
 const browserName = process.env.UI_V116_BROWSER || 'chromium';
 const playwrightEntry = process.env.UI_V116_PLAYWRIGHT
   ? pathToFileURL(path.join(process.env.UI_V116_PLAYWRIGHT, 'index.mjs')).href
@@ -68,6 +69,7 @@ try {
   const win = page.locator('#win');
   await page.waitForFunction(() => document.querySelector('.menu-shell'));
   check(await page.locator('.menu-shell').isVisible(), 'startup opens the same unified menu shell used for pause');
+  check((await page.locator('.menu-sidebar-foot small').innerText()).includes('v' + VERSION), 'menu footer shows the actual build version');
   for (const item of ['home', 'new', 'load']) {
     check(await page.locator(`.menu-nav [data-page="${item}"]`).count() === 1, `main navigation exposes the ${item} route`);
   }
@@ -120,6 +122,10 @@ try {
   const english200 = await page.locator('.menu-shell').innerText();
   check(english200.includes('New game') && !CYR.test(english200), 'English menu labels remain visible at 200% UI scale');
   await page.screenshot({ path: path.join(shots, `v116-menu-scale-200-en-${browserName}.png`) });
+  check(await page.evaluate(() => {
+    const sampler = document.getElementById('biosample-btn'), box = sampler?.getBoundingClientRect();
+    return !!box && !!document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)?.closest('#win');
+  }), 'the menu receives clicks above the biosampling HUD at 200% scale');
   await page.locator('.menu-stage-body').evaluate(el => { el.scrollTop = el.scrollHeight; });
   const bodyBox = await page.locator('.menu-stage-body').boundingBox();
   const actionBox = await page.locator('.menu-page-actions').boundingBox();
