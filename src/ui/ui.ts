@@ -7,6 +7,7 @@ import { genFormHtml, readGen, refreshGenForm } from './genform';
 import { NR_CAP } from '../sim/combat';
 import { TICKS } from '../core/types';
 import { SAVE_VERSION as SAVE_FMT } from '../sim/save';
+import { GAME_VERSION } from '../sim/compat';
 import { cleanGen, GenSet } from '../sim/world';
 import { RQ_MAX, missingPrereqs, depsToAdd } from '../sim/x116';
 import { ITEMS, GROUPS, ITEM_LIST } from '../data/items';
@@ -1103,7 +1104,7 @@ export class UI {
         <nav class="menu-nav" aria-label="Разделы меню">${page('home', 'Главная', '⌂')}${page('new', 'Новая игра', '＋')}${page('load', 'Загрузить', '▤')}
           <div class="menu-nav-label">ИГРА</div>${route('chal', 'Испытания', '◇')}${route('ach', 'Достижения', '✧')}${editor}${route('mp', 'Мультиплеер', '⌘')}
           <div class="menu-nav-label">СИСТЕМА</div>${route('mods', 'Моды', '⬡')}${route('settings', 'Настройки', '⚙')}${route('help', 'Помощь', '?')}${route('news', 'Что нового', '✦')}
-        </nav><div class="menu-sidebar-foot"><span class="menu-live-dot"></span> ${title === 'ЗАВОД-7' ? 'СИСТЕМА ГОТОВА' : 'МЕНЮ ПАУЗЫ'}<small>v1.16 · ${this.h.rendererMode() === 'webgl' ? 'WebGL2' : 'Canvas2D'}</small></div>
+        </nav><div class="menu-sidebar-foot"><span class="menu-live-dot"></span> ${title === 'ЗАВОД-7' ? 'СИСТЕМА ГОТОВА' : 'МЕНЮ ПАУЗЫ'}<small>v${esc(GAME_VERSION)} · ${this.h.rendererMode() === 'webgl' ? 'WebGL2' : 'Canvas2D'}</small></div>
       </aside><section class="menu-stage"><header class="menu-stage-head"><div><span class="menu-overline">${child ? 'РАЗДЕЛ' : 'ЗАВОД-7 / ПАНЕЛЬ УПРАВЛЕНИЯ'}</span><h1>${title}</h1></div>${child ? '<button class="menu-back" data-act="menu-back">← <span>Назад</span></button>' : '<button class="menu-close" data-act="menu-continue" aria-label="Продолжить">×</button>'}</header>
         <main class="menu-stage-body">${content}</main>
       </section></div>`;

@@ -154,6 +154,10 @@ try {
   // The startup screen can expose the preview world before any simulation is
   // started. Pause/resume must be measured against a real Worker-backed game.
   await startGameplay(page);
+  check(await page.evaluate(() => {
+    const box = document.getElementById('biosample-btn')?.getBoundingClientRect();
+    return !!box && !!document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)?.closest('#biosample');
+  }), 'biosampling controls remain reachable during gameplay');
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => document.querySelector('.menu-shell'));
   check(await page.locator('.menu-shell').isVisible(), 'Escape from gameplay opens the same unified pause menu');
