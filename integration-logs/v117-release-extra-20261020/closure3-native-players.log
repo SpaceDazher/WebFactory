@@ -1,0 +1,6 @@
+
+> zavod-7@1.17.0-dev.1 test:native117
+> node --import tsx tests/native-bootstrap-v117.mjs --players
+
+✔ packaged server: 16 independent network clients, 17th rejected, password/whitelist, physical resume, stable guest identity/inventory and persisted 16-engineer roster
+✔ packaged native process: bootstrap/Origin/CSRF, handoff replay/hash checks, persistent owner/inventory, stop/reopen and failed-save recovery pass

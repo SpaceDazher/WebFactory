@@ -1,0 +1,4 @@
+
+> zavod-7@1.17.0-dev.1 typecheck
+> tsc -p .
+

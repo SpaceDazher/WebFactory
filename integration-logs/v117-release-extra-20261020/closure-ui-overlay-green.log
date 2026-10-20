@@ -1,0 +1,59 @@
+  ✔ startup opens the same unified menu shell used for pause
+  ✔ menu footer shows the actual build version
+  ✔ main navigation exposes the home route
+  ✔ main navigation exposes the new route
+  ✔ main navigation exposes the load route
+  ✔ main navigation exposes chal
+  ✔ main navigation exposes ach
+  ✔ main navigation exposes mp
+  ✔ main navigation exposes mods
+  ✔ main navigation exposes settings
+  ✔ main navigation exposes help
+  ✔ main navigation exposes news
+  ✔ chal opens as a child of the unified menu
+  ✔ Back from chal returns to the menu
+  ✔ ach opens as a child of the unified menu
+  ✔ Back from ach returns to the menu
+  ✔ mp opens as a child of the unified menu
+  ✔ Back from mp returns to the menu
+  ✔ mods opens as a child of the unified menu
+  ✔ Back from mods returns to the menu
+  ✔ settings opens as a child of the unified menu
+  ✔ Back from settings returns to the menu
+  ✔ help opens as a child of the unified menu
+  ✔ Back from help returns to the menu
+  ✔ news opens as a child of the unified menu
+  ✔ Back from news returns to the menu
+  ✔ map editor opens above the unified menu
+  ✔ closing the map editor returns to the unified menu
+  ✔ load page presents all five manual save slots
+  ✔ seed survives switching between menu pages
+  ✔ game mode survives switching between menu pages
+  ✔ world generation options survive switching between menu pages
+  ✔ settings route uses English labels after changing language
+  ✔ back restores the selected menu page in the chosen language
+  ✔ world setup remains intact after a child screen
+  ✔ menu remains fully inside the viewport at 200% UI scale ({"x":60,"y":40,"width":1160,"height":720})
+  ✔ 200% menu text and controls do not create horizontal viewport clipping
+  ✔ English menu labels remain visible at 200% UI scale
+  ✔ the menu receives clicks above the biosampling HUD at 200% scale
+  ✔ new-world start action can be reached by scrolling the 200% menu content
+  ✔ menu visibly scales down at 75% ({"x":205,"y":130,"width":870,"height":540})
+  ✔ 75% menu stays within the viewport without horizontal clipping
+  ✔ gameplay movement keys do not dismiss or steal focus from an open menu
+  ✔ English menu labels remain visible at 75% UI scale
+  ✔ Continue closes the pause menu and returns to the game
+[E2E_GAME_START] seed 4242, Worker 64→125 (60.0 UPS)
+  ✔ biosampling controls remain reachable during gameplay
+  ✔ Escape from gameplay opens the same unified pause menu
+  ✔ the pause menu captures movement keys and freezes the simulation
+  ✔ closing the pause menu resumes the simulation
+  ✔ renderer sample places every tier and a two-lane turn ({"corner":true,"placed":{"assembler":4,"drill":4,"furnace":3}})
+  ✔ the WebGL2 renderer is active for the machine sample
+  ✔ WebGL session has no uncaught page errors
+[E2E_GAME_START] seed 4242, Worker 69→129 (60.0 UPS)
+  ✔ same machine tiers and curved belt build in the Canvas2D sample world ({"corner":true,"placed":{"assembler":4,"drill":4,"furnace":3}})
+  ✔ Canvas2D fallback is active
+  ✔ Canvas2D session has no uncaught page errors
+
+✔ v1.16 UI E2E passed

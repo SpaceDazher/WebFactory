@@ -1,0 +1,1 @@
+PASS: 16 actual installer files match the frozen candidate; five missing-file and three unsafe-archive cases rejected; extracted runtime executes

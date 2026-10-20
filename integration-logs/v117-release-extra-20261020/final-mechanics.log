@@ -1,0 +1,6 @@
+PASS seven research completions, existing/late peers, saved slot255 and real transfer
+PASS six melee weapons: fixed sector/range, windup, target cap, paid cell, idempotency and mid-swing restore
+PASS charged melee weapons refuse unpaid attacks
+PASS five speaker presets: no-power gate, actual event, off transition and no false start after load
+PASS six physical drone models retain UID/HP/charge/ammo through limited chest and save without cloning
+PASS fifteen distinct genome registrations consume data once and persist

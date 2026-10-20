@@ -1,0 +1,16 @@
+PASS paid species small W=1 ticks=2403
+PASS paid species medium W=2 ticks=4803
+PASS paid species big W=4 ticks=9603
+PASS paid species spitter W=2 ticks=4803
+PASS paid species spitter-big W=4 ticks=9603
+PASS paid species armored W=6 ticks=14403
+PASS paid species destroyer W=4 ticks=9603
+PASS paid species flyer W=4 ticks=9603
+PASS paid species brood W=8 ticks=19203
+PASS paid species giant W=10 ticks=24003
+PASS paid species queen W=24 ticks=57603
+PASS paid species worm-small W=2 ticks=4803
+PASS paid species worm-medium W=4 ticks=9603
+PASS paid species worm-big W=6 ticks=14403
+PASS paid species worm-behemoth W=10 ticks=24003
+PASS all fifteen species fabricate from raw buffers through three phases and real tank networks

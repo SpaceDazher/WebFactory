@@ -1,0 +1,5 @@
+
+> zavod-7@1.17.0-dev.1 build
+> node build.mjs --min
+
+dist/index.html 3695 KB

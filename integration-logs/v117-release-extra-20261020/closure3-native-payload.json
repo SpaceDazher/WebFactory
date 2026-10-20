@@ -1,0 +1,99 @@
+﻿{
+    "state":  "passed",
+    "runtime":  "v22.23.2",
+    "missingRequiredRejected":  [
+                                    "index.html",
+                                    "native/server.mjs",
+                                    "native/node.exe",
+                                    "native/runtime-manifest.json",
+                                    "native/Zavod7-Server-Tray.exe"
+                                ],
+    "unsafePayloadsRejected":  [
+                                   "traversal",
+                                   "absolute",
+                                   "duplicate"
+                               ],
+    "files":  [
+                  {
+                      "path":  "dist\\icon-192.png",
+                      "bytes":  25958,
+                      "sha256":  "443066741AE7913D55A4F0AB30DAEF1F5B0F7E60B6A3E0B7AF8CF36B48D30253"
+                  },
+                  {
+                      "path":  "dist\\icon-512.png",
+                      "bytes":  69211,
+                      "sha256":  "3D65D9B7E3D59AF9CEEC0751E12ED6BD39783FB2A7A48EE56F0C4C7806398734"
+                  },
+                  {
+                      "path":  "dist\\icon.svg",
+                      "bytes":  714,
+                      "sha256":  "7D375758C0853BF02133D358A3F41F7A31410EA49BDE5BCE031D5CA16D1A115D"
+                  },
+                  {
+                      "path":  "dist\\index.html",
+                      "bytes":  3784247,
+                      "sha256":  "7D6C9D774CF388F5316922390BD750AB63CF076ED54849FECE2A67C10FAF2E69"
+                  },
+                  {
+                      "path":  "dist\\manifest.webmanifest",
+                      "bytes":  603,
+                      "sha256":  "887843E6EFE2D29B00ED26496A348F71140F0C735C1CD4CE4320239ECC842644"
+                  },
+                  {
+                      "path":  "dist\\sw.js",
+                      "bytes":  781,
+                      "sha256":  "6CAD7D7D19AC23D8C8437928559F4864499EE5B02D3D33DF69C3B38D77268EB7"
+                  },
+                  {
+                      "path":  "dist\\licenses\\noble-hashes.txt",
+                      "bytes":  1109,
+                      "sha256":  "4F221AEE6E072336700C408C68AB3B96A3FC09F6AEBE6F48F1BD99E5EF13FAEC"
+                  },
+                  {
+                      "path":  "dist\\licenses\\tweetnacl.txt",
+                      "bytes":  1210,
+                      "sha256":  "88D9B4EB60579C191EC391CA04C16130572D7EEDC4A86DAA58BF28C6E14C9BCD"
+                  },
+                  {
+                      "path":  "dist\\native\\Node-LICENSE.txt",
+                      "bytes":  145485,
+                      "sha256":  "C738AE413CF561F174E34F6961F8CA458AAE2369A73640DDA6234C629B98BCC4"
+                  },
+                  {
+                      "path":  "dist\\native\\node.exe",
+                      "bytes":  86997320,
+                      "sha256":  "0D0F5E39F9F3D9587BC19F73EAB3C2C9C4903FD02D6DBF9C853DD81B3D95FAD4"
+                  },
+                  {
+                      "path":  "dist\\native\\relay-gateway.mjs",
+                      "bytes":  45919,
+                      "sha256":  "07C965B6FBAB33FC8C19DDB89914B061EC42FF1131C36C4590A63AFB4AED5486"
+                  },
+                  {
+                      "path":  "dist\\native\\rtc-dependency-lock.json",
+                      "bytes":  18021,
+                      "sha256":  "F44CFC8A2E6482537990ED59FF4EF3B37638D0C4DBA1AE2E850575D5F2935D71"
+                  },
+                  {
+                      "path":  "dist\\native\\runtime-manifest.json",
+                      "bytes":  340,
+                      "sha256":  "A8512E6BCEC01D84CD41E7C57375E2DA7DCBB15D9F5C410C90CB6F3CD00560AB"
+                  },
+                  {
+                      "path":  "dist\\native\\server.mjs",
+                      "bytes":  4233005,
+                      "sha256":  "262CEAA416E476C527EEE721CB0F31EC46256206248302B0EA99945D2EDFC26D"
+                  },
+                  {
+                      "path":  "dist\\native\\THIRD-PARTY-NOTICES.txt",
+                      "bytes":  73361,
+                      "sha256":  "9B49FA952E188CAC3EED58CC6FDC4250DE8F69C9895130F4204F5AC44B81DD6B"
+                  },
+                  {
+                      "path":  "dist\\native\\Zavod7-Server-Tray.exe",
+                      "bytes":  18944,
+                      "sha256":  "BCA6D0EF1B9C9A069A0D24AE633BC9234140CD91B4080FC5424878DF0688904E"
+                  }
+              ],
+    "limitation":  "Extraction and validation only; no installation, registry, tray, reboot or clean-Windows claim"
+}

@@ -1,0 +1,15 @@
+{
+  "checkedAt": "2026-10-20T18:09:09.2085968Z",
+  "state": "running",
+  "elapsedMs": 15083772.4679,
+  "clients": 16,
+  "commands": 240016,
+  "checkpoints": 1469,
+  "restartVerified": false,
+  "candidate": {
+    "version": "1.17.0-dev.1",
+    "serverSha256": "b45d743c8bcc274e620899e4d62fa79e0bf91494ac3f4afae3aa7080d289f560",
+    "runtimeSha256": "0d0f5e39f9f3d9587bc19f73eab3c2c9c4903fd02d6dbf9c853dd81b3d95fad4"
+  },
+  "note": "Previous binary continues separately; no final 24h acceptance inferred"
+}

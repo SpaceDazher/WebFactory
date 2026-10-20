@@ -1,0 +1,6 @@
+
+> zavod-7@1.17.0-dev.1 test:native117
+> node --import tsx tests/native-bootstrap-v117.mjs --browser
+
+✔ real Chromium UI joins the packaged native server with the same inventory and authoritative keyboard movement
+✔ packaged native process: bootstrap/Origin/CSRF, handoff replay/hash checks, persistent owner/inventory, stop/reopen and failed-save recovery pass

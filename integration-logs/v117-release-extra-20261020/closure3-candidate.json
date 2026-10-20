@@ -1,0 +1,10 @@
+{
+  "version": "1.17.0-dev.1",
+  "sourceCommit": "8de89e8fbd4f0bb5aaccd563b058134e3dcf63c1",
+  "createdAt": "2026-10-20T17:58:50.7980370Z",
+  "note": "Separate corrected candidate; not the binary in native-soak-6196.json",
+  "serverSha256": "262ceaa416e476c527eee721cb0f31ec46256206248302b0ea99945d2edfc26d",
+  "runtimeSha256": "0d0f5e39f9f3d9587bc19f73eab3c2c9c4903fd02d6dbf9c853dd81b3d95fad4",
+  "webSha256": "7d6c9d774cf388f5316922390bd750ab63cf076ed54849fece2a67c10faf2e69",
+  "setupSha256": "637104aae11e4ce9bce008f25f97b93f78b6377781256adce7bda592b677d8f0"
+}

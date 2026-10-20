@@ -1,0 +1,68 @@
+{
+  "state": "passed",
+  "pid": 24732,
+  "checkedAt": "2026-10-20T17:14:42.231Z",
+  "rows": [
+    {
+      "slot": 1,
+      "tick": 647890,
+      "hash": "d59863d45bc9e8ca",
+      "players": 16
+    },
+    {
+      "slot": 2,
+      "tick": 611889,
+      "hash": "4f069441a6b19c0b",
+      "players": 16
+    },
+    {
+      "slot": 3,
+      "tick": 575889,
+      "hash": "f82b9acfcd9469e9",
+      "players": 16
+    },
+    {
+      "slot": 4,
+      "tick": 539889,
+      "hash": "2ea1396a85b88a8e",
+      "players": 16
+    },
+    {
+      "slot": 5,
+      "tick": 503888,
+      "hash": "8ef26a1e9e62599e",
+      "players": 16
+    },
+    {
+      "slot": 6,
+      "tick": 467888,
+      "hash": "d9db4ec842e3b9b2",
+      "players": 16
+    },
+    {
+      "slot": 7,
+      "tick": 431887,
+      "hash": "66ea7d801e74042",
+      "players": 16
+    },
+    {
+      "slot": 8,
+      "tick": 395887,
+      "hash": "7e1308eff4e0013d",
+      "players": 16
+    },
+    {
+      "slot": 9,
+      "tick": 359886,
+      "hash": "5a40ee01a0d40321",
+      "players": 16
+    },
+    {
+      "slot": 10,
+      "tick": 323886,
+      "hash": "3c61099cf64aa4b6",
+      "players": 16
+    }
+  ],
+  "worldId": "0003b1b4d1a65b17bc1205292b2ff72e"
+}
