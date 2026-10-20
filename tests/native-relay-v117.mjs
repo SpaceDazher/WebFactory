@@ -33,11 +33,12 @@ export async function acceptReleasedHostReplacement(relay) {
     return client;
   };
   const result = client => client.messages.find(m => m.type === 'host-ready' || m.type === 'error');
+  const registration = () => ({ type: 'register', requestId: randomBytes(16).toString('hex'), leaseId,
+    worldId: randomBytes(16).toString('hex'), generation: 1, inviteToken: randomBytes(32).toString('base64url'), inviteExpiresAt: Date.now() + 86400000, maxPlayers: 8, modSet: modSet() });
   const register = async client => {
-    client.socket.send(JSON.stringify({ type: 'register', requestId: randomBytes(16).toString('hex'), leaseId,
-      worldId: randomBytes(16).toString('hex'), generation: 1, inviteToken: randomBytes(32).toString('base64url'), inviteExpiresAt: Date.now() + 86400000, maxPlayers: 8, modSet: modSet() }));
-    await wait(() => client.messages.some(m => m.type === 'registered'), 'own test room registers');
-    return client.messages.findLast(m => m.type === 'registered');
+    const message = registration(); client.socket.send(JSON.stringify(message));
+    await wait(() => client.messages.some(m => m.type === 'registered' && m.requestId === message.requestId), 'own test room registers');
+    return client.messages.find(m => m.type === 'registered' && m.requestId === message.requestId);
   };
   try {
     const old = connect(leaseId); await wait(() => result(old), 'original signed host authenticates'); assert.equal(result(old).type, 'host-ready');
@@ -50,8 +51,20 @@ export async function acceptReleasedHostReplacement(relay) {
     assert.equal(result(wrongLease).type, 'error'); assert.equal(old.socket.readyState, NodeWebSocket.OPEN);
     const replacement = connect(leaseId); await wait(() => result(replacement), 'released installation authenticates again');
     assert.equal(result(replacement).type, 'host-ready', 'a fresh signature for the same released installation replaces its lingering proxy socket');
-    await wait(() => old.code !== null, 'lingering socket is retired'); assert.equal(old.code, 1012);
-    await register(replacement);
+    if (relay.ca) { await wait(() => old.code !== null, 'lingering socket is retired'); assert.equal(old.code, 1012); }
+    const current = await register(replacement);
+    // A public proxy may delay the old client's close notification. Verify
+    // loss of authority instead: that socket cannot release or replace the
+    // new room, even while its local readyState still reports OPEN.
+    const stale = registration();
+    if (old.socket.readyState === NodeWebSocket.OPEN) {
+      old.socket.send(JSON.stringify({ type: 'release', leaseId })); old.socket.send(JSON.stringify(stale));
+    }
+    for (let check = 0; check < 4; check++) {
+      await new Promise(ok => setTimeout(ok, 250));
+      assert.equal((await relay.request(relay.origin + '/v1/rooms/' + current.code)).status, 200, 'retired socket cannot release or replace the current room');
+      assert.ok(!old.messages.some(m => m.type === 'registered' && m.requestId === stale.requestId), 'retired socket cannot publish another world');
+    }
     const activeDuplicate = connect(leaseId); await wait(() => result(activeDuplicate), 'active duplicate is rejected');
     assert.equal(result(activeDuplicate).type, 'error', 'an active world cannot be replaced'); assert.equal(replacement.socket.readyState, NodeWebSocket.OPEN);
     replacement.socket.send(JSON.stringify({ type: 'release', leaseId }));

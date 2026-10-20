@@ -1,14 +1,21 @@
-# Proposed public invitation endpoint
+# Public invitation gateway
 
-Proposed name: **play.zavod7-game.net**, one HTTPS origin for invitation pages,
-room resolution and WSS. This is a naming proposal, not a registered domain or
-a live service. No purchase, DNS update, VPS creation or deployment was made.
+Current operator-deployed free endpoint: **https://zavod7-relay.onrender.com**.
+HTTPS invitation landing, browser joins by full link/short code and a short 16-client HTTPS/WSS run passed after deployed gateway fix ac05429.
+Earlier public load attempts failed intermittently; sustained 16-player
+capacity is not accepted. See `../../docs/PUBLIC-RELAY-PROPOSAL-20261020.md`
+and `../../docs/RELEASE-ACCEPTANCE-20261020.md` for current evidence.
+
+The old `play.zavod7-game.net` name was a proposal only and is not used.
+Render deployment uses the root `render.yaml`, Node, and the Free plan.
+
+## Alternative operator-managed VPS
 
 The source supports a public gateway with separate installation identities,
 or a private single-host gateway. Use a VPS with a reachable public address,
 Docker Compose and a domain owned by the operator. Simulation and saves stay
 on each owner's PC; the VPS serves invitation pages and the fallback stream.
-This source has not been run or accepted as an operational public service.
+The VPS deployment below remains an alternative, not a requirement for Render.
 
 After registering a suitable domain, point its A record (and AAAA only if
 IPv6 is actually served) to the VPS. Copy `.env.example` to `.env`, enter the

@@ -1,5 +1,21 @@
 # Native server packaging
 
+Current checkpoint (20 Oct 2026): the operator deployed the public gateway at
+`https://zavod7-relay.onrender.com`. Local native/RTC/browser and a short public
+16-socket run have passed after gateway fix ac05429 was deployed. Earlier intermittent attempts are retained in the evidence report.
+Sustained public load and clean Windows installation are still unaccepted.
+Older implementation-only statements below describe prior checkpoints; use
+`../docs/RELEASE-ACCEPTANCE-20261020.md` for current evidence.
+
+To bake this endpoint into the game and Windows component, use:
+
+```powershell
+$env:ZAVOD_INVITE_ORIGIN = 'https://zavod7-relay.onrender.com'
+npm run native:build
+```
+
+No private credential is embedded; owner installation keys remain local.
+
 The Windows package is built on Windows with Node `22.23.2` and the installed .NET Framework C# compiler:
 
 ```powershell
