@@ -210,10 +210,18 @@ export class RelayGateway {
     }
     host.nonce = '';
     if (!valid || message.type !== 'host-auth' && message.type !== 'host-proof') { this.failHost(host, 'auth', 'Host authentication failed'); return; }
-    if (this.hosts.has(message.serverId)) { this.failHost(host, 'auth', 'This server identity already has an active tunnel'); return; }
-    if (this.hosts.size >= MAX_HOSTS || this.options.mode === 'private' && this.hosts.size > 0 || [...this.hosts.values()].filter(other => other.address === host.address).length >= 8) { this.failHost(host, 'limit', 'Host capacity reached'); return; }
     const route = this.routes.get(message.leaseId);
     if (route && route.serverId !== message.serverId) { this.failHost(host, 'lease', 'Routing identity is already owned'); return; }
+    const previous = this.hosts.get(message.serverId);
+    if (previous) {
+      // A TLS proxy may retain the old socket after the owner released its
+      // world. A fresh signature for that same installation may retire only
+      // this idle socket; an active world or different routing lease is denied.
+      const released = this.options.mode === 'public' && message.type === 'host-proof' && previous.leaseId === message.leaseId && !this.leases.has(message.serverId);
+      if (!released) { this.failHost(host, 'auth', 'This server identity already has an active tunnel'); return; }
+      previous.socket.close(1012, 'Released host connection replaced');
+    }
+    if (this.hosts.size >= MAX_HOSTS || this.options.mode === 'private' && this.hosts.size > 0 || [...this.hosts.values()].filter(other => other.address === host.address).length >= 8) { this.failHost(host, 'limit', 'Host capacity reached'); return; }
     host.serverId = message.serverId; host.leaseId = message.leaseId; host.authenticated = true;
     if (host.pending) { host.pending = false; this.pending--; }
     clearTimeout(host.timer); host.socket.setMessageLimit?.(NATIVE_WS_MAX_MESSAGE); this.hosts.set(host.serverId, host);
