@@ -370,14 +370,52 @@ function bioformNeeds(g: Game, f: Bioform) {
   }
   return { fed, station };
 }
+type BioOccupant = { form: Bioform; spec: ReturnType<typeof formSpec>; radius: number; cell: string };
+type BioOccupancy = { cells: Map<string, BioOccupant[]>; entries: Map<number, BioOccupant>; radius: number; memo: Map<string, boolean>; formId: number; spec: ReturnType<typeof formSpec> };
+// Live cells are scoped to one synchronous movement pass; search memoization
+// ends with that search. Diagnostic generators never retain an index across ticks.
+const activeBioOccupancy = new WeakMap<Game, BioOccupancy>();
+function indexBioOccupancy(g: Game): BioOccupancy {
+  const index: BioOccupancy = { cells: new Map(), entries: new Map(), radius: 0, memo: new Map(), formId: -1, spec: null };
+  for (const form of g.v117.genetics.forms) {
+    if (form.dead) continue;
+    const spec = formSpec(form.family), radius = Math.max(.35, (spec?.size || .7) / 2);
+    const key = `${Math.floor(form.x / 4)},${Math.floor(form.y / 4)}`;
+    let cell = index.cells.get(key); if (!cell) index.cells.set(key, cell = []);
+    const entry = { form, spec, radius, cell: key }; cell.push(entry); index.entries.set(form.id, entry); index.radius = Math.max(index.radius, radius);
+  }
+  return index;
+}
+function updateBioOccupancy(g: Game, form: Bioform) {
+  const index = activeBioOccupancy.get(g), entry = index?.entries.get(form.id); if (!index || !entry) return;
+  const key = `${Math.floor(form.x / 4)},${Math.floor(form.y / 4)}`; if (key === entry.cell) return;
+  const old = index.cells.get(entry.cell)!; old.splice(old.indexOf(entry), 1); if (!old.length) index.cells.delete(entry.cell);
+  let cell = index.cells.get(key); if (!cell) index.cells.set(key, cell = []); cell.push(entry); entry.cell = key;
+}
 function bioCanOccupy(g: Game, s: NonNullable<ReturnType<typeof formSpec>>, x: number, y: number, ignoreFormId = -1, ignoreForms?: ReadonlySet<number>) {
+  const index = activeBioOccupancy.get(g), memo = index && index.formId === ignoreFormId && index.spec === s && !ignoreForms ? index.memo : null;
+  const key = memo ? `${x},${y}` : '';
+  const cached = memo?.get(key); if (cached !== undefined) return cached;
+  const result = bioCanOccupyUncached(g, s, x, y, ignoreFormId, ignoreForms);
+  memo?.set(key, result); return result;
+}
+function bioCanOccupyUncached(g: Game, s: NonNullable<ReturnType<typeof formSpec>>, x: number, y: number, ignoreFormId: number, ignoreForms?: ReadonlySet<number>) {
   const r = Math.max(.35, s.size / 2), x0 = Math.floor(x - r), x1 = Math.floor(x + r), y0 = Math.floor(y - r), y1 = Math.floor(y + r);
   for (let ty = y0; ty <= y1; ty++) for (let tx = x0; tx <= x1; tx++) {
     if (!g.world.hasChunk(Math.floor(tx / 32), Math.floor(ty / 32))) return false;
     if (!s.fly && g.world.terrain(tx, ty) >= 3) return false;
     const e = g.entAt(tx, ty); if (!s.fly && e && PROTOS[e.proto]?.solid && !(e.t === 'gate' && e.open)) return false;
   }
-  for (const other of g.v117.genetics.forms) {
+  const index = activeBioOccupancy.get(g);
+  if (index) {
+    const range = r + index.radius;
+    for (let cy = Math.floor((y - range) / 4); cy <= Math.floor((y + range) / 4); cy++) for (let cx = Math.floor((x - range) / 4); cx <= Math.floor((x + range) / 4); cx++) {
+      for (const { form: other, spec, radius } of index.cells.get(`${cx},${cy}`) || []) {
+        if (other.dead || other.id === ignoreFormId || ignoreForms?.has(other.id)) continue;
+        if (!!spec?.fly === s.fly && Math.hypot(other.x - x, other.y - y) < r + radius) return false;
+      }
+    }
+  } else for (const other of g.v117.genetics.forms) {
     if (other.dead || other.id === ignoreFormId || ignoreForms?.has(other.id)) continue;
     const otherSpec = formSpec(other.family);
     if (!!otherSpec?.fly === s.fly && Math.hypot(other.x - x, other.y - y) < r + Math.max(.35, (otherSpec?.size || .7) / 2)) return false;
@@ -409,7 +447,7 @@ function directBioStep(g: Game, f: Bioform, s: NonNullable<ReturnType<typeof for
     const score = Math.hypot(tx - x, ty - y) + Math.abs(turn) * .12;
     if (!best || score < best.score) best = { x, y, score };
   }
-  if (!best) return false; f.x = best.x; f.y = best.y; return true;
+  if (!best) return false; f.x = best.x; f.y = best.y; updateBioOccupancy(g, f); return true;
 }
 function bioHeapPush(heap: BioPathNode[], n: BioPathNode) {
   let i = heap.length; heap.push(n);
@@ -471,8 +509,12 @@ function* searchBioPath(g: Game, f: Bioform, s: NonNullable<ReturnType<typeof fo
   path.reverse(); return { path, limited: false };
 }
 function findBioPath(g: Game, f: Bioform, s: NonNullable<ReturnType<typeof formSpec>>, tx: number, ty: number, stop: number): BioCell[] | null {
-  const search = searchBioPath(g, f, s, tx, ty, stop);
-  for (;;) { const next = search.next(); if (next.done) return next.value.path; }
+  const previous = activeBioOccupancy.get(g), index = previous || indexBioOccupancy(g);
+  activeBioOccupancy.set(g, { ...index, memo: new Map(), formId: f.id, spec: s });
+  try {
+    const search = searchBioPath(g, f, s, tx, ty, stop);
+    for (;;) { const next = search.next(); if (next.done) return next.value.path; }
+  } finally { if (previous) activeBioOccupancy.set(g, previous); else activeBioOccupancy.delete(g); }
 }
 export interface BioRoutePreview {
   lines: { formId: number; segment: number; points: { x: number; y: number }[]; problem?: string }[];
@@ -562,7 +604,7 @@ function moveBio(g: Game, f: Bioform, s: NonNullable<ReturnType<typeof formSpec>
     if (!best || score < best.score) best = { x, y, score };
   }
   if (!best) { f.path = []; f.pathAt = g.tick; return false; }
-  f.x = best.x; f.y = best.y; return true;
+  f.x = best.x; f.y = best.y; updateBioOccupancy(g, f); return true;
 }
 function damageOwnerId(g: Game, id: string) {
   const i = g.v117.playerIds.indexOf(id); return PLAYER_ID - Math.max(0, i);
@@ -1189,6 +1231,11 @@ export function meleeTick(g: Game) {
   if (s.windup > 0 && --s.windup === 0) executeMelee(g, s);
 }
 function stepForms(g: Game) {
+  const previous = activeBioOccupancy.get(g); activeBioOccupancy.set(g, indexBioOccupancy(g));
+  try { stepFormsIndexed(g); }
+  finally { if (previous) activeBioOccupancy.set(g, previous); else activeBioOccupancy.delete(g); }
+}
+function stepFormsIndexed(g: Game) {
   const releasedThisTick = new Set<number>();
   for (const j of [...g.v117.genetics.jobs]) {
     const fab = g.ents.get(j.fabId), s = source(j.family);

@@ -15,11 +15,11 @@ export function nativeSoakOptions(args) {
 }
 const median = values => { const v = values.slice().sort((a, b) => a - b); return v[Math.floor(v.length / 2)]; };
 
-export async function acceptNativeSoak({ clients, getStatus, options, metricsFile, reportFile }) {
+export async function acceptNativeSoak({ clients, getStatus, options, metricsFile, reportFile, candidate }) {
   assert.equal(clients.length, 16);
   const started = performance.now(), at = Date.now(), rows = new Map();
   let checkpoints = 0, lastCheckpoint = null, nextCheckpointTick = 0;
-  const report = { schema: 1, state: 'running', releaseDuration: options.releaseDuration, startedAt: new Date(at).toISOString(),
+  const report = { schema: 1, state: 'running', candidate, releaseDuration: options.releaseDuration, startedAt: new Date(at).toISOString(),
     durationMs: options.durationMs, elapsedMs: 0, clients: 16, commands: 0, checkpoints: 0, restartVerified: false,
     memoryMethod: 'packaged server process.memoryUsage after full GC once/minute; RSS and heap medians in minutes15–30 versus final15 minutes', samples: [] };
   await mkdir(dirname(reportFile), { recursive: true });

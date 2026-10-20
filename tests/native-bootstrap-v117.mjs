@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { access, mkdir, mkdtemp, readFile, realpath, rename, rm, rmdir, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createServer } from 'node:net';
@@ -26,7 +26,12 @@ await Promise.all(probes.map(s => new Promise((ok, fail) => s.close(error => err
 const data = await mkdtemp(join(root, 'native-smoke-'));
 const soakOptions = nativeSoakOptions(process.argv);
 const soak = soakOptions ? { options: soakOptions, metricsFile: resolve('logs/acceptance-20261020/native-soak-' + process.pid + '-memory.jsonl'), reportFile: resolve('logs/acceptance-20261020/native-soak-' + process.pid + '.json') } : null;
-if (soak) { await mkdir(dirname(soak.metricsFile), { recursive: true }); await writeFile(soak.metricsFile, '', { flag: 'wx' }); }
+if (soak) {
+  await mkdir(dirname(soak.metricsFile), { recursive: true }); await writeFile(soak.metricsFile, '', { flag: 'wx' });
+  soak.candidate = { version: JSON.parse(await readFile('package.json', 'utf8')).version,
+    serverSha256: createHash('sha256').update(await readFile('dist/native/server.mjs')).digest('hex'),
+    runtimeSha256: createHash('sha256').update(await readFile(runtime)).digest('hex') };
+}
 const relayHelpers = process.argv.includes('--relay') ? await import('./native-relay-v117.mjs') : null;
 const relay = relayHelpers ? process.env.ZAVOD_ACCEPTANCE_RELAY_ORIGIN
   ? await relayHelpers.connectPublicAcceptanceRelay(process.env.ZAVOD_ACCEPTANCE_RELAY_ORIGIN)

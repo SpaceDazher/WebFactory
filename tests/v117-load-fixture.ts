@@ -6,10 +6,11 @@ import { BIO_PROFILES, createBioCorpse } from '../src/sim/bio';
 import { UNITS } from '../src/sim/enemies';
 import { kitCmd, kitOf } from '../src/sim/combat';
 import { DRONE_MODELS, type Bioform, type DroneModel } from '../src/sim/v117';
+import { applyV117Command } from '../src/sim/v117Systems';
 
-export function releaseLoadFixture(weight: 0 | 128 | 256, corpses = 50000) {
+export function releaseLoadFixture(weight: 0 | 128 | 256, corpses = 50000, crowded = false) {
   const g = new Game(1175016, true, { enemies: 'none' }); g.dedicatedServer = weight === 256;
-  for (let y = -20; y < 90; y++) for (let x = -20; x < 90; x++) {
+  for (let y = -20; y < (crowded ? 90 : 144); y++) for (let x = -20; x < (crowded ? 90 : 144); x++) {
     const c = g.world.chunkAt(x, y), i = g.world.idx(x, y); c.land ||= new Set(); c.land.add(i); c.terrain[i] = 0; c.res[i] = 0; c.amt[i] = 0; c.mods.set(i, 0); g.world.removeDecor(x, y);
   }
   g.player.x = 32; g.player.y = 32;
@@ -32,10 +33,12 @@ export function releaseLoadFixture(weight: 0 | 128 | 256, corpses = 50000) {
   const used = Array(owners).fill(0); let total = 0;
   function add(spec: typeof BIO_V117_SOURCES[number]) {
     if (total + spec.w > weight) return false;
-    const who = used.findIndex(n => n + spec.w <= 24); if (who < 0) return false;
+    const available = used.map((n, i) => ({ n, i })).filter(p => p.n + spec.w <= 24);
+    if (!crowded) available.sort((a, b) => a.n - b.n || a.i - b.i);
+    const who = available[0]?.i ?? -1; if (who < 0) return false;
     const n = g.v117.genetics.forms.length, hp = UNITS[spec.kind]?.hp || PROTOS[spec.kind]?.hp;
     assert.ok(hp, 'source has a real unit/building prototype');
-    const f: Bioform = { id: g.v117.nextForm++, family: spec.kind, owner: g.v117.playerIds[who], x: 24 + n % 12, y: 24 + Math.floor(n / 12), hp, maxHp: hp,
+    const f: Bioform = { id: g.v117.nextForm++, family: spec.kind, owner: g.v117.playerIds[who], x: crowded ? 24 + n % 12 : -8 + n % 20 * 4, y: crowded ? 24 + Math.floor(n / 12) : -8 + Math.floor(n / 20) * 4, hp, maxHp: hp,
       sterile: true, food: 10, foodTimer: 0, foodCapsule: 0, emptyCapsuleDue: false, starvedTicks: 0, repair: 0, disconnected: 0, attackCooldown: 0,
       order: { mode: 'patrol', waypoints: [{ x: 40, y: 32 }, { x: 32, y: 40 }], combat: true, patrolMode: 'loop' }, target: null, dead: false };
     g.v117.genetics.forms.push(f); used[who] += spec.w; total += spec.w; return true;
@@ -43,6 +46,13 @@ export function releaseLoadFixture(weight: 0 | 128 | 256, corpses = 50000) {
   if (weight) {
     for (const spec of BIO_V117_SOURCES.slice().sort((a, b) => b.w - a.w)) assert.ok(add(spec), 'all fifteen species fit the load');
     while (total < weight) assert.ok(add(BIO_V117_SOURCES[0]));
+    if (!crowded) g.eachPl(() => {
+      const own = g.v117.genetics.forms.filter(f => f.owner === g.v117.playerIds[g.pl]); if (!own.length) return;
+      const squad = 'load-' + g.pl; for (const f of own) f.squad = squad;
+      const x = 50 + g.pl % 4 * 20, y = 50 + Math.floor(g.pl / 4) * 20;
+      applyV117Command(g, { t: 'v117', section: 'genetics', op: 'order', opId: squad, formId: own[0].id, squad, mode: 'patrol', points: [{ x, y }, { x: x + 8, y: y + 8 }] });
+      assert.ok(own.every(f => f.order.offset || own.length === 1), 'ordinary squad command creates real formation offsets');
+    });
     const models = Object.keys(DRONE_MODELS) as DroneModel[];
     for (let i = 0; i < owners; i++) for (let j = 0; j < 2; j++) {
       const model = models[(i * 2 + j) % models.length], spec = DRONE_MODELS[model];
