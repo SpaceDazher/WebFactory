@@ -66,7 +66,7 @@ export async function acceptNativePlayers({ request, headers, mutate, getStatus,
     constructor(url) {
       const origin = new URL(url).origin.replace(/^ws/, 'http');
       super(url, { origin, ...(relay && new URL(url).protocol === 'wss:' ? { ca: relay.ca } : {}) }); rawSockets.add(this);
-      this.once('close', () => rawSockets.delete(this));
+      this.once('close', (code, reason) => { rawSockets.delete(this); if (transportErrors.length < 40) transportErrors.push('socket close ' + code + ': ' + String(reason).slice(0, 140)); });
       this.on('error', error => { if (transportErrors.length < 40) transportErrors.push(error.message); });
     }
   }
@@ -133,7 +133,10 @@ export async function acceptNativePlayers({ request, headers, mutate, getStatus,
     };
     client.ready = async () => {
       await until(() => client.snapshot || client.error || client.ended, 'client joins');
-      assert.equal(client.error, null, 'client receives no server/client protocol error'); assert.ok(client.snapshot, 'client receives a real snapshot');
+      assert.equal(client.error, null, 'client receives no server/client protocol error');
+      if (!client.snapshot) { const status = (await getStatus()).invite.relay;
+        assert.fail('client receives a real snapshot: ' + JSON.stringify({ name: auth.name, welcomed: !!client.welcome, ended: client.ended,
+          errors: transportErrors.slice(-8), relayState: status.state, relayMessage: status.message })); }
       return client;
     };
     return client;
@@ -183,7 +186,7 @@ export async function acceptNativePlayers({ request, headers, mutate, getStatus,
     catch (error) { throw new Error(error.message + '; ' + JSON.stringify({ errors: transportErrors, closed: [owner, ...guests].filter(c => c.ended).length,
       resumed: [owner, ...guests].filter(c => c.snapshots > originalSnapshots.get(c)).length, online: (await getStatus()).world.players })); }
     assert.equal((await getStatus()).world.players, 16);
-    if (relay) {
+    if (relay?.dropHost) {
       const beforeTunnelLoss = new Map([owner, ...guests].map(c => [c, c.snapshots]));
       relay.dropHost();
       try { await until(() => [owner, ...guests].every(c => !c.ended && c.snapshots > beforeTunnelLoss.get(c)), 'outbound WSS tunnel recovers all existing engineers', 25000); }
@@ -219,7 +222,8 @@ export async function acceptNativePlayers({ request, headers, mutate, getStatus,
     const stopped = await mutate('/stop', { requestId: randomUUID(), expectedRevision: state.revision });
     await mutate('/start', { requestId: randomUUID(), expectedRevision: stopped.revision, world: { mode: 'open', worldId } });
     if (relay) {
-      await until(async () => (await getStatus()).invite.relay.state === 'ready', 'room reopens');
+      try { await until(async () => (await getStatus()).invite.relay.state === 'ready', 'room reopens'); }
+      catch (error) { const status = (await getStatus()).invite.relay; throw new Error(error.message + '; relay state: ' + JSON.stringify({ state: status.state, message: status.message })); }
       const registration = (await getStatus()).invite.relay;
       assert.ok(registration.roomCode === initialRelayCode, 'ordinary stop/start preserves the existing short code');
       assert.equal(registration.expiresAt, initialRelayExpiry, 'ordinary stop/start does not renew the invitation deadline');
@@ -230,7 +234,7 @@ export async function acceptNativePlayers({ request, headers, mutate, getStatus,
     assert.equal(roster.length, 16); assert.equal(new Set(roster.map(p => p.playerId)).size, 16);
     completed = true;
     console.log('✔ packaged server: 16 independent network clients, 17th rejected, password/whitelist, physical resume, stable guest identity/inventory and persisted 16-engineer roster');
-    if (relay) console.log('✔ packaged public-key relay over verified local TLS, room resolution, no control-plane exposure and host tunnel recovery: ' + JSON.stringify(relay.stats));
+    if (relay) console.log('✔ packaged public-key relay over verified ' + (relay.dropHost ? 'local TLS with host tunnel recovery' : 'public HTTPS/WSS') + ', room resolution and no control-plane exposure: ' + JSON.stringify(relay.stats));
   } finally {
     for (const client of clients) client.close();
     if (completed) await until(async () => (await getStatus()).world.players === 0, 'final client grace period', 35000);

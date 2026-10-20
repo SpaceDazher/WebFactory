@@ -7,8 +7,82 @@ import { spawn, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { basename, join, resolve, sep } from 'node:path';
-import { wsReceiver } from '../node_modules/playwright-core/lib/utilsBundle.js';
-import { createHash, X509Certificate } from 'node:crypto';
+import { wsReceiver, ws as NodeWebSocket } from '../node_modules/playwright-core/lib/utilsBundle.js';
+import { createHash, X509Certificate, generateKeyPairSync, randomBytes, sign } from 'node:crypto';
+import { nativeRelayHostProofPayload } from '../src/net/native-relay-protocol.ts';
+import { modSet } from '../src/net/mods.ts';
+
+export async function acceptReleasedHostReplacement(relay) {
+  const pair = generateKeyPairSync('ed25519'), key = Buffer.from(pair.publicKey.export({ format: 'jwk' }).x, 'base64url');
+  const serverId = createHash('sha256').update(key).digest('hex'), leaseId = randomBytes(16).toString('hex'), clients = [];
+  const wait = async (predicate, label) => {
+    const deadline = performance.now() + 10000;
+    while (!predicate() && performance.now() < deadline) await new Promise(ok => setTimeout(ok, 20));
+    assert.ok(predicate(), label);
+  };
+  const connect = id => {
+    const client = { messages: [], code: null };
+    const socket = client.socket = new NodeWebSocket(relay.hostUrl, relay.ca ? { ca: relay.ca } : {}); clients.push(client);
+    socket.on('error', error => { client.error = error.message; });
+    socket.on('close', code => { client.code = code; });
+    socket.on('message', raw => {
+      const message = JSON.parse(String(raw)); client.messages.push(message);
+      if (message.type === 'host-challenge') socket.send(JSON.stringify({ type: 'host-proof', serverId, leaseId: id, nonce: message.nonce, publicKey: key.toString('hex'),
+        proof: sign(null, Buffer.from(nativeRelayHostProofPayload(relay.origin, message.nonce, serverId, id)), pair.privateKey).toString('hex') }));
+    });
+    return client;
+  };
+  const result = client => client.messages.find(m => m.type === 'host-ready' || m.type === 'error');
+  const register = async client => {
+    client.socket.send(JSON.stringify({ type: 'register', requestId: randomBytes(16).toString('hex'), leaseId,
+      worldId: randomBytes(16).toString('hex'), generation: 1, inviteToken: randomBytes(32).toString('base64url'), inviteExpiresAt: Date.now() + 86400000, maxPlayers: 8, modSet: modSet() }));
+    await wait(() => client.messages.some(m => m.type === 'registered'), 'own test room registers');
+    return client.messages.findLast(m => m.type === 'registered');
+  };
+  try {
+    const old = connect(leaseId); await wait(() => result(old), 'original signed host authenticates'); assert.equal(result(old).type, 'host-ready');
+    const registered = await register(old);
+    old.socket.send(JSON.stringify({ type: 'release', leaseId }));
+    const deadline = performance.now() + 10000;
+    while ((await relay.request(relay.origin + '/v1/rooms/' + registered.code)).status !== 404 && performance.now() < deadline) await new Promise(ok => setTimeout(ok, 20));
+    assert.equal((await relay.request(relay.origin + '/v1/rooms/' + registered.code)).status, 404, 'release is processed while the proxy-side socket stays open');
+    const wrongLease = connect(randomBytes(16).toString('hex')); await wait(() => result(wrongLease), 'different lease is rejected');
+    assert.equal(result(wrongLease).type, 'error'); assert.equal(old.socket.readyState, NodeWebSocket.OPEN);
+    const replacement = connect(leaseId); await wait(() => result(replacement), 'released installation authenticates again');
+    assert.equal(result(replacement).type, 'host-ready', 'a fresh signature for the same released installation replaces its lingering proxy socket');
+    await wait(() => old.code !== null, 'lingering socket is retired'); assert.equal(old.code, 1012);
+    await register(replacement);
+    const activeDuplicate = connect(leaseId); await wait(() => result(activeDuplicate), 'active duplicate is rejected');
+    assert.equal(result(activeDuplicate).type, 'error', 'an active world cannot be replaced'); assert.equal(replacement.socket.readyState, NodeWebSocket.OPEN);
+    replacement.socket.send(JSON.stringify({ type: 'release', leaseId }));
+    console.log('✔ fresh signed host replaces only its released same-lease socket; different lease and active duplicates remain rejected');
+  } finally { for (const client of clients) client.socket.close(); }
+}
+
+// Opt-in public acceptance: use the platform's real certificate chain and
+// never stop/restart its gateway or trust the local fixture's private CA.
+export async function connectPublicAcceptanceRelay(rawOrigin) {
+  const url = new URL(rawOrigin);
+  assert.ok(url.protocol === 'https:' && url.origin === rawOrigin && !url.username && !url.password, 'exact public HTTPS origin required');
+  const request = async (target, headers = {}) => {
+    const destination = new URL(target);
+    assert.equal(destination.origin, url.origin, 'public acceptance stays on the selected service');
+    const response = await fetch(destination, { headers, redirect: 'error', signal: AbortSignal.timeout(30000) });
+    const chunks = []; let bytes = 0;
+    for await (const chunk of response.body) {
+      bytes += chunk.byteLength;
+      if (bytes > 8 * 1024 * 1024) throw new Error('Public relay response exceeds acceptance bound');
+      chunks.push(chunk);
+    }
+    const text = Buffer.concat(chunks).toString('utf8');
+    return { status: response.status, json: async () => JSON.parse(text), text: async () => text };
+  };
+  const landing = await request(url.origin + '/');
+  assert.equal(landing.status, 200); assert.match(await landing.text(), /id="code"/);
+  assert.equal((await request(url.origin + '/', { Origin: 'https://untrusted.invalid' })).status, 403);
+  return { origin: url.origin, hostUrl: url.origin.replace(/^https:/, 'wss:') + '/v1/host', request,
+    stats: { publicOrigin: url.origin }, async stop() {} };
+}
 
 export async function startAcceptanceRelay(root, runtime) {
   const directory = await mkdtemp(join(root, 'relay-smoke-'));
@@ -102,6 +176,9 @@ export async function startAcceptanceRelay(root, runtime) {
 }
 
 export async function acceptRelayLanding(browser, relay, getStatus) {
+  const readyDeadline = performance.now() + 45000;
+  while ((await getStatus()).invite.relay.state !== 'ready' && performance.now() < readyDeadline) await new Promise(ok => setTimeout(ok, 100));
+  assert.equal((await getStatus()).invite.relay.state, 'ready', 'the asynchronous relay publication is ready before entering an invitation');
   const invitation = (await getStatus()).invite;
   for (const value of [invitation.code, invitation.relay.roomCode]) {
     const context = await browser.newContext();
