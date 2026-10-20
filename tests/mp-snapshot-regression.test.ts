@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { gunzipSync } from 'node:zlib';
 import { deserialize } from '../src/sim/save';
 import { makeSnapper, VP } from '../src/sim/snapshot';
 import { DYN_STRIDE } from '../src/sim/protocol';
 import { WorkerSim } from '../src/client/mirror';
 import { ckey } from '../src/core/types';
 
-const fixture = JSON.parse(readFileSync('integration-logs/mp-bugfix-20261014/fixtures/zavod7-bug-20261013-2140.json', 'utf8'));
+const fixture = JSON.parse(gunzipSync(readFileSync(new URL('./fixtures/mp-snapshot-v116.json.gz', import.meta.url))).toString('utf8'));
 const vp: VP = { x0: -100_000, y0: -100_000, x1: 100_000, y1: 100_000 };
 const ctx = { tickMs: 0, ups: 60, ns: null, mpMe: 0, mpWaitMs: 0, postMs: 0 };
 

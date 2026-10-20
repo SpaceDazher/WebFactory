@@ -1,6 +1,7 @@
 // Focused v1.16 menu and rendering journeys. Run after `npm run build` with
 // `node tests/e2e-ui-v116.mjs`; screenshots are captured from the built app.
 import assert from 'node:assert/strict';
+import { startGameplay } from './gameplay-start.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -144,6 +145,9 @@ try {
   await page.screenshot({ path: path.join(shots, `v116-menu-home-ru-75-${browserName}.png`) });
   await page.locator('.menu-primary-actions [data-act="menu-continue"]').click();
   check(!(await page.locator('.menu-shell').count()), 'Continue closes the pause menu and returns to the game');
+  // The startup screen can expose the preview world before any simulation is
+  // started. Pause/resume must be measured against a real Worker-backed game.
+  await startGameplay(page);
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => document.querySelector('.menu-shell'));
   check(await page.locator('.menu-shell').isVisible(), 'Escape from gameplay opens the same unified pause menu');
@@ -170,6 +174,7 @@ try {
   await context.close();
 
   const canvasRun = await openApp('canvas');
+  await startGameplay(canvasRun.page);
   await canvasRun.page.evaluate(() => window.__zavod.ui.close());
   const canvasBuilt = await buildMachineSamples(canvasRun.page);
   check(canvasBuilt?.corner && canvasBuilt.placed.assembler === 4 && canvasBuilt.placed.drill === 4 && canvasBuilt.placed.furnace === 3,
